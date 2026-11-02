@@ -2,6 +2,13 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.0.1 - 2026-11-02
+
+### License
+
+- Relicense MdAssetSync from MIT to GPL-3.0-only for version 1.0.1 and later.
+- Keep the previously published 1.0.0 release and the rights already granted for it under the MIT License unchanged.
+
 ## 1.0.0 - 2026-11-02
 
 Initial public release.

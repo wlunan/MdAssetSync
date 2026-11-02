@@ -25,7 +25,7 @@ This plugin is designed for Obsidian desktop and requires Node.js filesystem acc
 
 ### Release archive
 
-1. Extract `md-asset-sync-1.0.0.zip`.
+1. Extract `md-asset-sync-1.0.1.zip`.
 2. Create or open `<Vault>/.obsidian/plugins/md-asset-sync/`.
 3. Copy `main.js` and `manifest.json` into that folder.
 4. Restart Obsidian or reload third-party plugins.
@@ -107,4 +107,6 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GNU General Public License v3.0 only](LICENSE).
+
+MdAssetSync 1.0.0 was distributed under the MIT License. GPL-3.0-only applies to version 1.0.1 and later.

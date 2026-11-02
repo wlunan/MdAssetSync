@@ -25,7 +25,7 @@ MdAssetSync 用于把外部 Markdown 文件导入 Obsidian，并保留解析本�
 
 ### 使用发布包
 
-1. 解压 `md-asset-sync-1.0.0.zip`。
+1. 解压 `md-asset-sync-1.0.1.zip`。
 2. 创建或打开 `<Vault>/.obsidian/plugins/md-asset-sync/`。
 3. 将 `main.js` 和 `manifest.json` 复制到该目录。
 4. 重启 Obsidian 或重载第三方插件。
@@ -107,4 +107,6 @@ Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录�
 
 ## 许可证
 
-本项目使用 [MIT License](LICENSE)。
+本项目使用 [GNU General Public License v3.0 only](LICENSE)。
+
+MdAssetSync 1.0.0 曾以 MIT License 发布；从 1.0.1 开始使用 GPL-3.0-only。
