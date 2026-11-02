@@ -1,7 +1,20 @@
-import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath } from "obsidian";
+import {
+	App,
+	Modal,
+	Notice,
+	Platform,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	setTooltip,
+	TFile,
+	TFolder,
+	normalizePath
+} from "obsidian";
 import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
 type CollisionStrategy = "append-md5" | "overwrite" | "skip";
 type PluginLanguage = "en" | "zh-CN";
@@ -28,6 +41,13 @@ interface ElectronDialog {
 	}): Promise<{ canceled: boolean; filePaths: string[] }>;
 }
 
+interface ParsedImageSyntax {
+	altText: string;
+	imageReference: string;
+	original: string;
+	unresolvedReference?: string;
+}
+
 const TRANSLATIONS = {
 	en: {
 		commandName: "Import external Markdown and sync images",
@@ -38,6 +58,7 @@ const TRANSLATIONS = {
 			`MdAssetSync: importing ${current}/${total}: ${fileName}`,
 		cannotStartImport: "MdAssetSync: unable to start the import. See the developer console for details.",
 		pathIsNotFile: "The path is not a file.",
+		referenceDefinitionNotFound: (label: string) => `Image reference definition not found: ${label}`,
 		imageNotFound: "Image not found",
 		reusedSameName: "Same file name and content, reusing the existing image",
 		skippedSameName: "Different file with the same name was skipped",
@@ -93,6 +114,7 @@ const TRANSLATIONS = {
 			`MdAssetSync：正在导入 ${current}/${total}：${fileName}`,
 		cannotStartImport: "MdAssetSync：无法启动导入。详情见开发者控制台。",
 		pathIsNotFile: "路径不是文件",
+		referenceDefinitionNotFound: (label: string) => `找不到图片引用定义：${label}`,
 		imageNotFound: "找不到图片",
 		reusedSameName: "同名且内容相同，复用已有图片",
 		skippedSameName: "同名图片内容不同，已跳过",
@@ -149,14 +171,17 @@ const DEFAULT_SETTINGS: MdAssetSyncSettings = {
 	keepMissingImageLinks: true
 };
 
-// This intentionally handles only the standard Markdown image form requested by the plugin.
-// Angle-bracket destinations allow standard Markdown paths containing spaces.
-const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+// Supports inline Markdown images, reference-style images, and Obsidian embeds.
+const IMAGE_SYNTAX_PATTERN =
+	/!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|!\[([^\]\n]*)\]\[([^\]\n]*)\]|!\[\[([^\]\n]+)\]\]|!\[([^\]\n]+)\](?![\[(])|<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/gi;
+const REFERENCE_DEFINITION_PATTERN =
+	/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*\r?$/gm;
 
 export default class MdAssetSyncPlugin extends Plugin {
 	settings: MdAssetSyncSettings = DEFAULT_SETTINGS;
 	private isImporting = false;
 	private importCommand: { name: string } | null = null;
+	private ribbonIconEl: HTMLElement | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -166,6 +191,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 			name: this.t().commandName,
 			callback: () => this.importExternalMarkdown()
 		});
+		this.ribbonIconEl = this.addRibbonIcon("images", this.t().commandName, () => this.importExternalMarkdown());
 
 		this.addSettingTab(new MdAssetSyncSettingTab(this.app, this));
 	}
@@ -182,9 +208,12 @@ export default class MdAssetSyncPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	refreshCommandName(): void {
+	refreshInterfaceLabels(): void {
 		if (this.importCommand) {
 			this.importCommand.name = this.t().commandName;
+		}
+		if (this.ribbonIconEl) {
+			setTooltip(this.ribbonIconEl, this.t().commandName);
 		}
 	}
 
@@ -271,7 +300,11 @@ export default class MdAssetSyncPlugin extends Plugin {
 		destinationMarkdownPath: string,
 		log: ImportLog
 	): Promise<string> {
-		const matches = Array.from(markdown.matchAll(MARKDOWN_IMAGE_PATTERN));
+		const codeMaskedMarkdown = maskCodeSegments(markdown);
+		const referenceDefinitions = collectReferenceDefinitions(markdown, codeMaskedMarkdown);
+		const matches = Array.from(markdown.matchAll(IMAGE_SYNTAX_PATTERN)).filter(
+			(match) => codeMaskedMarkdown[match.index ?? 0] !== " "
+		);
 		if (matches.length === 0) {
 			return markdown;
 		}
@@ -288,11 +321,24 @@ export default class MdAssetSyncPlugin extends Plugin {
 			output += markdown.slice(cursor, matchStart);
 			cursor = matchStart + match[0].length;
 
-			const altText = match[1];
-			const imageReference = removeAngleBrackets(match[2]);
+			const parsedImage = parseImageSyntax(match, referenceDefinitions);
+			if (!parsedImage) {
+				output += match[0];
+				continue;
+			}
+			if (parsedImage.unresolvedReference) {
+				const message = this.t().referenceDefinitionNotFound(parsedImage.unresolvedReference);
+				log.missingImages.push(`${destinationMarkdownPath} ← ${message}`);
+				console.warn(`[MdAssetSync] ${message}`);
+				output += parsedImage.original;
+				continue;
+			}
+
+			const altText = parsedImage.altText;
+			const imageReference = parsedImage.imageReference;
 			if (isRemoteOrEmbeddedImage(imageReference)) {
 				log.skippedRemoteOrEmbedded += 1;
-				output += match[0];
+				output += parsedImage.original;
 				continue;
 			}
 
@@ -334,9 +380,9 @@ export default class MdAssetSyncPlugin extends Plugin {
 
 			if (assetVaultPath) {
 				const relativePath = makeVaultRelativePath(destinationDirectory, assetVaultPath);
-				output += `![${altText}](${escapeMarkdownDestination(relativePath)})`;
+				output += `![${escapeMarkdownAltText(altText)}](${escapeMarkdownDestination(relativePath)})`;
 			} else if (this.settings.keepMissingImageLinks) {
-				output += match[0];
+				output += parsedImage.original;
 			}
 		}
 
@@ -546,7 +592,7 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.language = value as PluginLanguage;
 						await this.plugin.saveSettings();
-						this.plugin.refreshCommandName();
+						this.plugin.refreshInterfaceLabels();
 						this.display();
 					})
 			);
@@ -711,12 +757,104 @@ function chooseVaultFolder(app: App, strings: Translation): Promise<string | nul
 	});
 }
 
+function collectReferenceDefinitions(markdown: string, codeMaskedMarkdown: string): Map<string, string> {
+	const definitions = new Map<string, string>();
+	for (const match of markdown.matchAll(REFERENCE_DEFINITION_PATTERN)) {
+		if (codeMaskedMarkdown[match.index ?? 0] === " ") {
+			continue;
+		}
+		const label = normalizeReferenceLabel(match[1]);
+		if (!definitions.has(label)) {
+			definitions.set(label, removeAngleBrackets(match[2] ?? match[3] ?? ""));
+		}
+	}
+	return definitions;
+}
+
+function maskCodeSegments(markdown: string): string {
+	const ranges: Array<[number, number]> = [];
+	const fencedCodePattern = /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r|$)[\s\S]*?^ {0,3}\1[ \t]*(?=\r?$)/gm;
+	for (const match of markdown.matchAll(fencedCodePattern)) {
+		ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+	}
+
+	let maskedMarkdown = maskCodeRanges(markdown, ranges);
+	const inlineCodePattern = /(`+)([\s\S]*?)\1/g;
+	for (const match of maskedMarkdown.matchAll(inlineCodePattern)) {
+		ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+	}
+	maskedMarkdown = maskCodeRanges(markdown, ranges);
+	return maskedMarkdown;
+}
+
+function maskCodeRanges(markdown: string, ranges: Array<[number, number]>): string {
+	let masked = markdown;
+	for (const [start, end] of [...ranges].sort((left, right) => right[0] - left[0])) {
+		const replacement = masked.slice(start, end).replace(/[^\r\n]/g, " ");
+		masked = masked.slice(0, start) + replacement + masked.slice(end);
+	}
+	return masked;
+}
+
+function parseImageSyntax(match: RegExpMatchArray, definitions: Map<string, string>): ParsedImageSyntax | null {
+	const original = match[0];
+
+	if (match[1] !== undefined && match[2] !== undefined) {
+		return {
+			altText: match[1],
+			imageReference: removeAngleBrackets(match[2]),
+			original
+		};
+	}
+
+	if (match[3] !== undefined) {
+		const altText = match[3];
+		const label = match[4]?.trim() || altText;
+		const imageReference = definitions.get(normalizeReferenceLabel(label));
+		return imageReference
+			? { altText, imageReference, original }
+			: { altText, imageReference: "", original, unresolvedReference: label };
+	}
+
+	if (match[5] !== undefined) {
+		const [rawTarget, ...aliasParts] = match[5].split("|");
+		const imageReference = rawTarget.trim();
+		const altText = aliasParts.join("|").trim() || path.basename(imageReference, path.extname(imageReference));
+		return { altText, imageReference, original };
+	}
+
+	if (match[6] !== undefined) {
+		const altText = match[6];
+		const imageReference = definitions.get(normalizeReferenceLabel(altText));
+		return imageReference ? { altText, imageReference, original } : null;
+	}
+
+	if (match[7] !== undefined || match[8] !== undefined) {
+		const imageReference = decodeHtmlEntities(match[7] ?? match[8] ?? "").trim();
+		const altText =
+			extractHtmlAttribute(original, "alt") || path.basename(imageReference, path.extname(imageReference));
+		return { altText, imageReference, original };
+	}
+
+	return null;
+}
+
+function normalizeReferenceLabel(label: string): string {
+	return unescapeMarkdownText(label).trim().replace(/\s+/g, " ").normalize("NFKC").toLocaleLowerCase();
+}
+
 function isRemoteOrEmbeddedImage(imagePath: string): boolean {
-	return /^(https?:\/\/|data:)/i.test(imagePath.trim());
+	const reference = imagePath.trim();
+	return /^(https?:\/\/|data:)/i.test(reference) || (/^[a-z][a-z0-9+.-]+:/i.test(reference) && !/^file:/i.test(reference));
 }
 
 function resolveExternalImagePath(originalDir: string, imageReference: string): string {
-	const decodedReference = safelyDecodeUriComponent(imageReference.trim());
+	const unescapedReference = unescapeMarkdownText(imageReference.trim());
+	if (/^file:/i.test(unescapedReference)) {
+		return path.normalize(fileURLToPath(unescapedReference));
+	}
+
+	const decodedReference = safelyDecodeUriComponent(unescapedReference);
 	const platformPath = path.sep === "\\" ? decodedReference.replace(/\//g, "\\") : decodedReference.replace(/\\/g, "/");
 	return path.isAbsolute(platformPath) || /^[A-Za-z]:[\\/]/.test(decodedReference) || /^\\\\/.test(decodedReference)
 		? path.normalize(platformPath)
@@ -736,6 +874,37 @@ function removeAngleBrackets(value: string): string {
 	return trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1) : trimmed;
 }
 
+function unescapeMarkdownText(value: string): string {
+	const escapable = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+	return value.replace(/\\(.)/g, (match, character: string) => (escapable.includes(character) ? character : match));
+}
+
+function extractHtmlAttribute(tag: string, attributeName: string): string {
+	const pattern = new RegExp(`\\b${attributeName}\\s*=\\s*(["'])(.*?)\\1`, "i");
+	return decodeHtmlEntities(tag.match(pattern)?.[2] ?? "");
+}
+
+function decodeHtmlEntities(value: string): string {
+	const namedEntities: Record<string, string> = {
+		amp: "&",
+		apos: "'",
+		gt: ">",
+		lt: "<",
+		quot: "\""
+	};
+
+	return value
+		.replace(/&([a-z]+);/gi, (match, name: string) => namedEntities[name.toLowerCase()] ?? match)
+		.replace(/&#(\d+);/g, (match, code: string) => {
+			const valuePoint = Number.parseInt(code, 10);
+			return Number.isFinite(valuePoint) ? String.fromCodePoint(valuePoint) : match;
+		})
+		.replace(/&#x([0-9a-f]+);/gi, (match, code: string) => {
+			const valuePoint = Number.parseInt(code, 16);
+			return Number.isFinite(valuePoint) ? String.fromCodePoint(valuePoint) : match;
+		});
+}
+
 function parentVaultPath(vaultPath: string): string {
 	const separatorIndex = vaultPath.lastIndexOf("/");
 	return separatorIndex === -1 ? "" : vaultPath.slice(0, separatorIndex);
@@ -753,6 +922,10 @@ function makeVaultRelativePath(fromFolder: string, toPath: string): string {
 
 function escapeMarkdownDestination(value: string): string {
 	return value.replace(/ /g, "%20").replace(/#/g, "%23").replace(/\(/g, "%28").replace(/\)/g, "%29");
+}
+
+function escapeMarkdownAltText(value: string): string {
+	return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
 }
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {

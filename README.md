@@ -9,8 +9,10 @@ This plugin is designed for Obsidian desktop and requires Node.js filesystem acc
 ## Features
 
 - Select one or more external `.md` files with the operating system file picker.
+- Start an import from the MdAssetSync ribbon button on the left sidebar or from the command palette.
 - Resolve relative image paths from the original Markdown folder, including `./` and `../`.
 - Resolve absolute local paths on Windows and macOS.
+- Resolve Markdown inline images, reference-style images, Obsidian embeds, HTML `<img>` sources, and local `file://` URIs.
 - Follow Obsidian's native **Files and links → Default location for new attachments** setting.
 - Choose a separate destination folder for imported Markdown; the default is the vault root.
 - Rewrite images as standard Markdown links: `![alt](relative/path.png)`.
@@ -23,7 +25,7 @@ This plugin is designed for Obsidian desktop and requires Node.js filesystem acc
 
 ### Release archive
 
-1. Extract `md-asset-sync-1.1.0.zip`.
+1. Extract `md-asset-sync-1.0.0.zip`.
 2. Create or open `<Vault>/.obsidian/plugins/md-asset-sync/`.
 3. Copy `main.js` and `manifest.json` into that folder.
 4. Restart Obsidian or reload third-party plugins.
@@ -43,7 +45,7 @@ Copy `main.js` and `manifest.json` to the plugin folder in the vault.
 ## Usage
 
 1. Configure **Settings → Files and links → Default location for new attachments** in Obsidian.
-2. Run **MdAssetSync: Import external Markdown and sync images** from the command palette.
+2. Click the MdAssetSync image icon on the left ribbon, or run **MdAssetSync: Import external Markdown and sync images** from the command palette.
 3. Select one or more external Markdown files.
 4. Choose where the Markdown files should be written in the vault. The default is the vault root.
 5. Wait for the import to finish and review the result notification and developer console.
@@ -76,6 +78,11 @@ Supported:
 
 - `![image](./assets/photo.png)`
 - `![image](../shared/photo.png)`
+- `![image](<my images/photo one.png>)`
+- Reference images such as `![image][photo]` with `[photo]: ./photo.png`
+- Obsidian embeds such as `![[./assets/photo.png]]` and `![[photo.png|alt text]]`
+- HTML images such as `<img src="./photo.png" alt="image">`
+- Local URIs such as `file:///C:/Images/photo.png`
 - Windows absolute paths such as `C:/Images/photo.png`
 - macOS absolute paths
 - Percent-encoded local paths containing spaces
@@ -84,13 +91,13 @@ Not processed:
 
 - HTTP and HTTPS URLs
 - `data:` base64 images
-- HTML `<img>` elements
-- Wiki image links such as `![[photo.png]]`
+- Other network or application URI schemes
 
 ## Limitations
 
 - Desktop only.
-- Only standard Markdown image syntax is parsed.
+- HTML image sizing and styling attributes are discarded when converted to standard Markdown.
+- Images inside inline code and fenced code blocks are preserved without processing.
 - External Markdown files must remain readable during the import.
 - If an imported Markdown file already exists in the destination folder, MdAssetSync adds an `-import-N` suffix rather than overwriting it.
 

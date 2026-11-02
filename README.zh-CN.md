@@ -9,8 +9,10 @@ MdAssetSync 用于把外部 Markdown 文件导入 Obsidian，并保留解析本�
 ## 功能
 
 - 通过系统文件选择框选择多个外部 `.md` 文件。
+- 可从左侧 Ribbon 栏的 MdAssetSync 按钮或命令面板启动导入。
 - 以外部 Markdown 的原始文件夹解析相对图片路径，支持 `./` 和 `../`。
 - 支持 Windows 和 macOS 的绝对本地路径。
+- 支持 Markdown 内联图片、引用式图片、Obsidian 图片嵌入、HTML `<img>` 本地来源和 `file://` 本地 URI。
 - 图片目录遵循 Obsidian 的“文件与链接 → 新附件的默认位置”设置。
 - Markdown 目标目录单独选择，默认是 Vault 根目录。
 - 图片统一改写为标准 Markdown 链接 `![alt](relative/path.png)`。
@@ -23,7 +25,7 @@ MdAssetSync 用于把外部 Markdown 文件导入 Obsidian，并保留解析本�
 
 ### 使用发布包
 
-1. 解压 `md-asset-sync-1.1.0.zip`。
+1. 解压 `md-asset-sync-1.0.0.zip`。
 2. 创建或打开 `<Vault>/.obsidian/plugins/md-asset-sync/`。
 3. 将 `main.js` 和 `manifest.json` 复制到该目录。
 4. 重启 Obsidian 或重载第三方插件。
@@ -43,7 +45,7 @@ npm run build
 ## 使用
 
 1. 在 Obsidian 的“设置 → 文件与链接 → 新附件的默认位置”中配置附件目录。
-2. 从命令面板执行“MdAssetSync: 导入外部Markdown并同步图片资源”。
+2. 点击左侧 Ribbon 栏的 MdAssetSync 图片图标，或从命令面板执行“MdAssetSync: 导入外部Markdown并同步图片资源”。
 3. 选择一个或多个外部 Markdown 文件。
 4. 选择 Markdown 在 Vault 中的写入位置，默认是 Vault 根目录。
 5. 等待导入结束，查看结果通知和开发者控制台。
@@ -76,6 +78,11 @@ Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录�
 
 - `![image](./assets/photo.png)`
 - `![image](../shared/photo.png)`
+- `![image](<带 空格/photo one.png>)`
+- `![image][photo]` 配合 `[photo]: ./photo.png` 的引用式图片
+- `![[./assets/photo.png]]`、`![[photo.png|替代文字]]` 等 Obsidian 图片嵌入
+- `<img src="./photo.png" alt="image">` 等 HTML 图片
+- `file:///C:/Images/photo.png` 等本地文件 URI
 - `C:/Images/photo.png` 等 Windows 绝对路径
 - macOS 绝对路径
 - 包含空格且使用百分号编码的本地路径
@@ -84,13 +91,13 @@ Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录�
 
 - HTTP 和 HTTPS 地址
 - `data:` base64 图片
-- HTML `<img>` 元素
-- `![[photo.png]]` 等 Wiki 图片链接
+- 其他网络或应用 URI 协议
 
 ## 边界
 
 - 仅支持桌面端。
-- 只解析标准 Markdown 图片语法。
+- HTML 图片转换为标准 Markdown 后会丢失宽高和样式属性。
+- 行内代码和围栏代码块中的图片文本会保持原样。
 - 导入期间外部 Markdown 文件必须保持可读。
 - 目标目录已有同名 Markdown 时，将追加 `-import-N` 后缀，不覆盖原文档。
 
