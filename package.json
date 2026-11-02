@@ -1,6 +1,6 @@
 {
   "name": "md-asset-sync",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Obsidian desktop plugin for importing external Markdown and its local image assets.",
   "license": "GPL-3.0-only",
   "main": "main.js",

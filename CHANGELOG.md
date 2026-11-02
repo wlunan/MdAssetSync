@@ -2,6 +2,13 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.0.2 - 2026-11-02
+
+### Community directory review
+
+- Render the plugin settings heading with Obsidian's `Setting.setHeading()` API.
+- Apply the hidden file input style with `setCssStyles()` instead of assigning directly to `style`.
+
 ## 1.0.1 - 2026-11-02
 
 ### License

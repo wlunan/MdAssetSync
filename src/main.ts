@@ -579,7 +579,7 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		const strings = this.plugin.t();
 		containerEl.empty();
-		containerEl.createEl("h2", { text: strings.settingsHeading });
+		new Setting(containerEl).setName(strings.settingsHeading).setHeading();
 
 		new Setting(containerEl)
 			.setName(strings.languageName)
@@ -724,7 +724,7 @@ function chooseMarkdownFilesWithInput(): Promise<string[]> {
 		input.type = "file";
 		input.accept = ".md,.markdown,text/markdown";
 		input.multiple = true;
-		input.style.display = "none";
+		input.setCssStyles({ display: "none" });
 		document.body.appendChild(input);
 
 		input.addEventListener(
