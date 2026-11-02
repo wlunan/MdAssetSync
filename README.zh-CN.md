@@ -104,3 +104,7 @@ Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录�
 ## 更新记录
 
 见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证
+
+本项目使用 [MIT License](LICENSE)。

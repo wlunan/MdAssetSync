@@ -104,3 +104,7 @@ Not processed:
 ## Release notes
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
