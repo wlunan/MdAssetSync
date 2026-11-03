@@ -8,7 +8,7 @@ This plugin requires Obsidian 1.13.0 or later on desktop and uses Node.js filesy
 
 ## Features
 
-- Select one or more external `.md` files with the operating system file picker.
+- Select one or more external `.md` files, or select a folder to recursively import its `.md` and `.markdown` files. Hidden folders and `node_modules` are skipped.
 - Start an import from the MdAssetSync ribbon button on the left sidebar or from the command palette.
 - Resolve relative image paths from the original Markdown folder, including `./` and `../`.
 - Resolve absolute local paths on Windows and macOS.
@@ -50,7 +50,7 @@ Copy `main.js` and `manifest.json` to the plugin folder in the vault.
 1. Configure **Settings → Files and links → Default location for new attachments** in Obsidian.
 2. In **Settings → Community plugins → MdAssetSync**, choose whether non-image attachments should be synchronized.
 3. Click the MdAssetSync image icon on the left ribbon, or run **MdAssetSync: Import external Markdown and sync assets** from the command palette.
-4. Select one or more external Markdown files.
+4. Choose **Markdown files** to select one or more files, or **Folder** to recursively import Markdown from a folder.
 5. Choose where the Markdown files should be written in the vault. The default is the vault root.
 6. Wait for the import to finish and review the result notification and import-result dialog.
 

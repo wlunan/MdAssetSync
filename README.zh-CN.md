@@ -8,7 +8,7 @@ MdAssetSync 用于把外部 Markdown 文件导入 Obsidian，并保留解析本�
 
 ## 功能
 
-- 通过系统文件选择框选择多个外部 `.md` 文件。
+- 通过系统文件选择框选择多个外部 `.md` 文件，或选择一个文件夹递归导入其中的 `.md` 和 `.markdown` 文件；会跳过隐藏文件夹和 `node_modules`。
 - 可从左侧 Ribbon 栏的 MdAssetSync 按钮或命令面板启动导入。
 - 以外部 Markdown 的原始文件夹解析相对图片路径，支持 `./` 和 `../`。
 - 支持 Windows 和 macOS 的绝对本地路径。
@@ -50,7 +50,7 @@ npm run build
 1. 在 Obsidian 的“设置 → 文件与链接 → 新附件的默认位置”中配置附件目录。
 2. 在“设置 → 第三方插件 → MdAssetSync”中选择是否同步图片以外的附件。
 3. 点击左侧 Ribbon 栏的 MdAssetSync 图片图标，或从命令面板执行“MdAssetSync: 导入外部 Markdown 并同步资源”。
-4. 选择一个或多个外部 Markdown 文件。
+4. 选择“Markdown 文件”以选择一个或多个文件，或选择“文件夹”递归导入其中的 Markdown。
 5. 选择 Markdown 在 Vault 中的写入位置，默认是 Vault 根目录。
 6. 等待导入结束，查看结果通知和导入结果弹窗。
 

@@ -130,6 +130,13 @@ const TRANSLATIONS = {
 		keepMissingName: "Keep original links for missing assets",
 		keepMissingDesc:
 			"When disabled, missing local image and attachment links are removed. Remote and base64 images are always kept.",
+		importUsageName: "Importing Markdown",
+		importUsageDesc:
+			"Run the import command, then choose Markdown files or a folder. Folder imports recursively include .md and .markdown files; hidden folders and node_modules are skipped. Imported notes are written to the destination you choose, without preserving the source folder structure.",
+		sourcePickerHeading: "Choose an import source",
+		sourcePickerDesc: "Choose Markdown files or a folder containing Markdown files.",
+		chooseFiles: "Choose Markdown files",
+		chooseFolder: "Choose a folder",
 		folderModalHeading: "Choose the Markdown import location",
 		folderModalDesc:
 			"This choice controls only where Markdown files are written. Assets follow the attachment location configured in Obsidian Settings → Files and links.",
@@ -197,6 +204,13 @@ const TRANSLATIONS = {
 		linkFormatValue: "标准 Markdown ![]()",
 		keepMissingName: "保留找不到资源的原始链接",
 		keepMissingDesc: "关闭后，找不到的本地图片和附件会从 Markdown 正文移除；网络和 base64 图片始终保留。",
+		importUsageName: "导入 Markdown",
+		importUsageDesc:
+			"运行导入命令后，可选择 Markdown 文件或文件夹。选择文件夹时会递归导入其中的 .md 和 .markdown 文件，并跳过隐藏文件夹和 node_modules。导入后的笔记会写入随后选择的目标目录，不保留源文件夹层级。",
+		sourcePickerHeading: "选择导入来源",
+		sourcePickerDesc: "请选择 Markdown 文件，或包含 Markdown 文件的文件夹。",
+		chooseFiles: "选择 Markdown 文件",
+		chooseFolder: "选择文件夹",
 		folderModalHeading: "选择 Markdown 导入位置",
 		folderModalDesc:
 			"此选择只决定 Markdown 文件的位置。图片和附件会遵循 Obsidian“设置 → 文件与链接”中的附件默认存放位置。",
@@ -321,9 +335,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 		this.isImporting = true;
 		let progress: Notice | null = null;
 		try {
-			const sourcePaths = Array.from(
-				new Set((await chooseMarkdownFiles(this.t().markdownFilter)).map((sourcePath) => path.normalize(sourcePath)))
-			);
+			const sourcePaths = await chooseMarkdownFiles(this.app, this.t());
 			if (sourcePaths.length === 0) {
 				return;
 			}
@@ -792,6 +804,10 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 		const strings = this.plugin.t();
 		return [
 			{
+				name: strings.importUsageName,
+				desc: strings.importUsageDesc
+			},
+			{
 				name: strings.languageName,
 				desc: strings.languageDesc,
 				control: {
@@ -969,19 +985,59 @@ class VaultFolderPickerModal extends Modal {
 	}
 }
 
-async function chooseMarkdownFiles(markdownFilter: string): Promise<string[]> {
+type ImportSourceKind = "files" | "folder";
+
+class ImportSourcePickerModal extends Modal {
+	private completed = false;
+
+	constructor(
+		app: App,
+		private readonly strings: Translation,
+		private readonly onSelect: (sourceKind: ImportSourceKind | null) => void
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl("h2", { text: this.strings.sourcePickerHeading });
+		this.contentEl.createEl("p", { text: this.strings.sourcePickerDesc });
+		new Setting(this.contentEl)
+			.addButton((button) => button.setButtonText(this.strings.cancel).onClick(() => this.finish(null)))
+			.addButton((button) => button.setButtonText(this.strings.chooseFiles).onClick(() => this.finish("files")))
+			.addButton((button) =>
+				button.setButtonText(this.strings.chooseFolder).setCta().onClick(() => this.finish("folder"))
+			);
+	}
+
+	onClose(): void {
+		if (!this.completed) this.finish(null);
+		this.contentEl.empty();
+	}
+
+	private finish(sourceKind: ImportSourceKind | null): void {
+		if (this.completed) return;
+		this.completed = true;
+		this.onSelect(sourceKind);
+		this.close();
+	}
+}
+
+async function chooseMarkdownFiles(app: App, strings: Translation): Promise<string[]> {
+	const sourceKind = await chooseImportSourceKind(app, strings);
+	if (!sourceKind) return [];
+
 	const dialog = getElectronDialog();
 	if (dialog) {
 		const result = await dialog.showOpenDialog({
-			properties: ["openFile", "multiSelections"],
-			filters: [{ name: markdownFilter, extensions: ["md", "markdown"] }]
+			properties: [sourceKind === "files" ? "openFile" : "openDirectory", "multiSelections"],
+			filters: sourceKind === "files" ? [{ name: strings.markdownFilter, extensions: ["md", "markdown"] }] : undefined
 		});
-		return result.canceled ? [] : result.filePaths;
+		return result.canceled ? [] : collectMarkdownFiles(result.filePaths);
 	}
 
 	// Obsidian desktop normally exposes Electron's dialog. This keeps the command usable
 	// if a future version removes that bridge while still using the OS file chooser.
-	return chooseMarkdownFilesWithInput();
+	return collectMarkdownFiles(await chooseMarkdownFilesWithInput(sourceKind));
 }
 
 function getElectronDialog(): ElectronDialog | null {
@@ -999,11 +1055,19 @@ function getElectronDialog(): ElectronDialog | null {
 	}
 }
 
-function chooseMarkdownFilesWithInput(): Promise<string[]> {
+function chooseImportSourceKind(app: App, strings: Translation): Promise<ImportSourceKind | null> {
+	return new Promise((resolve) => new ImportSourcePickerModal(app, strings, resolve).open());
+}
+
+function chooseMarkdownFilesWithInput(sourceKind: ImportSourceKind): Promise<string[]> {
 	return new Promise((resolve) => {
 		const input = document.body.createEl("input");
 		input.type = "file";
-		input.accept = ".md,.markdown,text/markdown";
+		if (sourceKind === "files") {
+			input.accept = ".md,.markdown,text/markdown";
+		} else {
+			input.setAttr("webkitdirectory", "");
+		}
 		input.multiple = true;
 		input.setCssStyles({ display: "none" });
 
@@ -1029,6 +1093,44 @@ function chooseMarkdownFilesWithInput(): Promise<string[]> {
 
 		input.click();
 	});
+}
+
+async function collectMarkdownFiles(sourcePaths: string[]): Promise<string[]> {
+	const markdownPaths = new Set<string>();
+
+	for (const sourcePath of sourcePaths) {
+		const sourceStat = (await fs.stat(sourcePath)) as { isFile(): boolean; isDirectory(): boolean };
+		if (sourceStat.isFile()) {
+			if (isMarkdownFilePath(sourcePath)) markdownPaths.add(path.normalize(sourcePath));
+			continue;
+		}
+		if (sourceStat.isDirectory()) await collectMarkdownFilesFromDirectory(sourcePath, markdownPaths);
+	}
+
+	return Array.from(markdownPaths);
+}
+
+async function collectMarkdownFilesFromDirectory(directoryPath: string, markdownPaths: Set<string>): Promise<void> {
+	const entries = await (
+		fs as unknown as {
+			readdir(path: string, options: { withFileTypes: true }): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>>;
+		}
+	).readdir(directoryPath, { withFileTypes: true });
+	for (const entry of entries) {
+		if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+
+		const entryPath = path.resolve(directoryPath, entry.name);
+		if (entry.isDirectory()) {
+			await collectMarkdownFilesFromDirectory(entryPath, markdownPaths);
+		} else if (entry.isFile() && isMarkdownFilePath(entryPath)) {
+			markdownPaths.add(path.normalize(entryPath));
+		}
+	}
+}
+
+function isMarkdownFilePath(filePath: string): boolean {
+	const extension = path.extname(filePath).toLowerCase();
+	return extension === ".md" || extension === ".markdown";
 }
 
 function chooseVaultFolder(app: App, strings: Translation): Promise<string | null> {
