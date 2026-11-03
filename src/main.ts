@@ -1,11 +1,13 @@
 import {
 	App,
+	FuzzySuggestModal,
 	Modal,
 	Notice,
 	Platform,
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	type FuzzyMatch,
 	type SettingDefinitionItem,
 	setTooltip,
 	TFile,
@@ -27,6 +29,7 @@ interface MdAssetSyncSettings {
 	keepMissingAssetLinks: boolean;
 	attachmentSyncMode: AttachmentSyncMode;
 	customAttachmentExtensions: string;
+	lastMarkdownFolder: string | null;
 }
 
 interface ImportLog {
@@ -138,13 +141,12 @@ const TRANSLATIONS = {
 		chooseFiles: "Choose Markdown files",
 		chooseFolder: "Choose a folder",
 		folderModalHeading: "Choose the Markdown import location",
-		folderModalDesc:
-			"This choice controls only where Markdown files are written. Assets follow the attachment location configured in Obsidian Settings → Files and links.",
-		markdownFolderName: "Markdown destination folder",
-		markdownFolderDesc: "Defaults to the vault root. This is independent of the attachment folder and does not affect asset placement.",
+		folderSearchPlaceholder: "Search Vault folders…",
+		currentNoteFolder: "Current note folder",
+		lastUsedFolder: "Last used",
+		noMatchingFolders: "No matching folders",
 		vaultRoot: "Vault root",
 		cancel: "Cancel",
-		importHere: "Import here",
 		markdownFilter: "Markdown"
 	},
 	"zh-CN": {
@@ -212,13 +214,12 @@ const TRANSLATIONS = {
 		chooseFiles: "选择 Markdown 文件",
 		chooseFolder: "选择文件夹",
 		folderModalHeading: "选择 Markdown 导入位置",
-		folderModalDesc:
-			"此选择只决定 Markdown 文件的位置。图片和附件会遵循 Obsidian“设置 → 文件与链接”中的附件默认存放位置。",
-		markdownFolderName: "Markdown 目标文件夹",
-		markdownFolderDesc: "默认 Vault 根目录。这里独立于附件目录，资源文件不会依据此选项决定存放位置。",
+		folderSearchPlaceholder: "搜索 Vault 文件夹…",
+		currentNoteFolder: "当前笔记所在文件夹",
+		lastUsedFolder: "上次使用",
+		noMatchingFolders: "没有匹配的文件夹",
 		vaultRoot: "Vault 根目录",
 		cancel: "取消",
-		importHere: "导入到此位置",
 		markdownFilter: "Markdown"
 	}
 } satisfies Record<PluginLanguage, object>;
@@ -230,7 +231,8 @@ const DEFAULT_SETTINGS: MdAssetSyncSettings = {
 	collisionStrategy: "append-md5",
 	keepMissingAssetLinks: true,
 	attachmentSyncMode: "off",
-	customAttachmentExtensions: ""
+	customAttachmentExtensions: "",
+	lastMarkdownFolder: null
 };
 const ATTACHMENT_SYNC_MODES: AttachmentSyncMode[] = ["off", "office", "all", "custom"];
 const COLLISION_STRATEGIES: CollisionStrategy[] = ["append-md5", "overwrite", "skip"];
@@ -303,6 +305,8 @@ export default class MdAssetSyncPlugin extends Plugin {
 			typeof this.settings.customAttachmentExtensions === "string"
 				? normalizeCustomExtensions(this.settings.customAttachmentExtensions).join(", ")
 				: DEFAULT_SETTINGS.customAttachmentExtensions;
+		this.settings.lastMarkdownFolder =
+			typeof this.settings.lastMarkdownFolder === "string" ? this.settings.lastMarkdownFolder : null;
 	}
 
 	async saveSettings(): Promise<void> {
@@ -340,9 +344,13 @@ export default class MdAssetSyncPlugin extends Plugin {
 				return;
 			}
 
-			const targetFolder = await chooseVaultFolder(this.app, this.t());
+			const targetFolder = await chooseVaultFolder(this.app, this.t(), this.settings.lastMarkdownFolder);
 			if (targetFolder === null) {
 				return;
+			}
+			if (targetFolder !== this.settings.lastMarkdownFolder) {
+				this.settings.lastMarkdownFolder = targetFolder;
+				await this.saveSettings();
 			}
 			if (
 				this.settings.attachmentSyncMode === "custom" &&
@@ -927,54 +935,86 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 	}
 }
 
-class VaultFolderPickerModal extends Modal {
+type FolderChoiceMarker = "current" | "recent";
+
+interface FolderChoice {
+	path: string;
+	markers: FolderChoiceMarker[];
+}
+
+class VaultFolderPickerModal extends FuzzySuggestModal<FolderChoice> {
 	private completed = false;
-	private selectedPath = "";
+	private readonly choices: FolderChoice[];
 
 	constructor(
 		app: App,
 		private readonly strings: Translation,
+		recentFolder: string | null,
 		private readonly onSelect: (folderPath: string | null) => void
 	) {
 		super(app);
+		this.setTitle(strings.folderModalHeading);
+		this.setPlaceholder(strings.folderSearchPlaceholder);
+		this.emptyStateText = strings.noMatchingFolders;
+		this.choices = this.buildChoices(recentFolder);
 	}
 
-	onOpen(): void {
-		this.contentEl.createEl("h2", { text: this.strings.folderModalHeading });
-		this.contentEl.createEl("p", {
-			text: this.strings.folderModalDesc
-		});
-		const folders = this.app.vault
-			.getAllFolders()
-			.map((folder) => folder.path)
-			.filter((folderPath) => folderPath.length > 0)
-			.sort((left, right) => left.localeCompare(right, "zh-CN"));
+	getItems(): FolderChoice[] {
+		return this.choices;
+	}
 
-		new Setting(this.contentEl)
-			.setName(this.strings.markdownFolderName)
-			.setDesc(this.strings.markdownFolderDesc)
-			.addDropdown((dropdown) => {
-				dropdown.addOption("", this.strings.vaultRoot);
-				for (const folderPath of folders) {
-					dropdown.addOption(folderPath, folderPath);
-				}
-				dropdown.setValue(this.selectedPath).onChange((value) => {
-					this.selectedPath = value;
-				});
-			});
+	getItemText(choice: FolderChoice): string {
+		return choice.path || this.strings.vaultRoot;
+	}
 
-		new Setting(this.contentEl)
-			.addButton((button) => button.setButtonText(this.strings.cancel).onClick(() => this.finish(null)))
-			.addButton((button) =>
-				button.setButtonText(this.strings.importHere).setCta().onClick(() => this.finish(this.selectedPath))
+	renderSuggestion(match: FuzzyMatch<FolderChoice>, el: HTMLElement): void {
+		const choice = match.item;
+		el.createDiv({ cls: "suggestion-title", text: this.getItemText(choice) });
+		if (choice.markers.length > 0) {
+			const markerLabels = choice.markers.map((marker) =>
+				marker === "current" ? this.strings.currentNoteFolder : this.strings.lastUsedFolder
 			);
+			el.createDiv({ cls: "suggestion-note", text: markerLabels.join(" · ") });
+		}
+	}
+
+	onChooseItem(choice: FolderChoice): void {
+		this.finish(choice.path);
 	}
 
 	onClose(): void {
-		if (!this.completed) {
-			this.finish(null);
-		}
-		this.contentEl.empty();
+		if (this.completed) return;
+		this.completed = true;
+		this.onSelect(null);
+	}
+
+	private buildChoices(recentFolder: string | null): FolderChoice[] {
+		const folderPaths = this.app.vault
+			.getAllFolders()
+			.map((folder) => folder.path)
+			.sort((left, right) => left.localeCompare(right, "zh-CN"));
+		const availablePaths = new Set(folderPaths);
+		const choicesByPath = new Map<string, FolderChoice>();
+		const addChoice = (folderPath: string, marker?: FolderChoiceMarker): void => {
+			if (!availablePaths.has(folderPath)) return;
+			const existing = choicesByPath.get(folderPath);
+			if (existing) {
+				if (marker && !existing.markers.includes(marker)) existing.markers.push(marker);
+				return;
+			}
+			choicesByPath.set(folderPath, {
+				path: folderPath,
+				markers: marker ? [marker] : []
+			});
+		};
+
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile?.parent) addChoice(activeFile.parent.path, "current");
+		if (recentFolder !== null) addChoice(recentFolder, "recent");
+		addChoice("");
+		for (const folderPath of folderPaths) addChoice(folderPath);
+
+		return Array.from(choicesByPath.values());
 	}
 
 	private finish(folderPath: string | null): void {
@@ -1133,9 +1173,9 @@ function isMarkdownFilePath(filePath: string): boolean {
 	return extension === ".md" || extension === ".markdown";
 }
 
-function chooseVaultFolder(app: App, strings: Translation): Promise<string | null> {
+function chooseVaultFolder(app: App, strings: Translation, recentFolder: string | null): Promise<string | null> {
 	return new Promise((resolve) => {
-		new VaultFolderPickerModal(app, strings, resolve).open();
+		new VaultFolderPickerModal(app, strings, recentFolder, resolve).open();
 	});
 }
 

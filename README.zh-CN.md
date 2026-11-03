@@ -51,7 +51,7 @@ npm run build
 2. 在“设置 → 第三方插件 → MdAssetSync”中选择是否同步图片以外的附件。
 3. 点击左侧 Ribbon 栏的 MdAssetSync 图片图标，或从命令面板执行“MdAssetSync: 导入外部 Markdown 并同步资源”。
 4. 选择“Markdown 文件”以选择一个或多个文件，或选择“文件夹”递归导入其中的 Markdown。
-5. 选择 Markdown 在 Vault 中的写入位置，默认是 Vault 根目录。
+5. 搜索并选择 Markdown 在 Vault 中的写入位置；选择器会优先显示当前笔记所在文件夹、上次使用的位置和 Vault 根目录。
 6. 等待导入结束，查看结果通知和导入结果弹窗。
 
 Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录不会改变资源文件的位置。
@@ -60,7 +60,7 @@ Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录�
 
 MdAssetSync 需要本地文件系统权限，才能导入 Vault 之外的文件。插件只读取你通过系统文件选择框明确选中的外部 Markdown，以及这些文档引用的本地资源；不会上传内容、发起网络请求或收集遥测数据。
 
-导入的 Markdown、图片和附件均通过 Obsidian Vault API 写入 Vault。MdAssetSync 只会枚举 Vault 文件夹以填充 Markdown 目标目录选择器，不会通过直接文件系统访问检查 Vault 笔记内容。
+导入的 Markdown、图片和附件均通过 Obsidian Vault API 写入 Vault。MdAssetSync 只会枚举 Vault 文件夹以填充可搜索的 Markdown 目标目录选择器，并读取当前活动笔记所在文件夹以提供快捷入口；不会通过直接文件系统访问检查 Vault 笔记内容。
 
 ## 附件行为
 

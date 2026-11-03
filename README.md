@@ -51,7 +51,7 @@ Copy `main.js` and `manifest.json` to the plugin folder in the vault.
 2. In **Settings → Community plugins → MdAssetSync**, choose whether non-image attachments should be synchronized.
 3. Click the MdAssetSync image icon on the left ribbon, or run **MdAssetSync: Import external Markdown and sync assets** from the command palette.
 4. Choose **Markdown files** to select one or more files, or **Folder** to recursively import Markdown from a folder.
-5. Choose where the Markdown files should be written in the vault. The default is the vault root.
+5. Search for and choose where the Markdown files should be written in the vault. The picker prioritizes the current note's folder, the last-used destination, and the vault root.
 6. Wait for the import to finish and review the result notification and import-result dialog.
 
 The Markdown destination and the attachment destination are independent. Changing the Markdown target folder does not change where assets are stored.
@@ -60,7 +60,7 @@ The Markdown destination and the attachment destination are independent. Changin
 
 MdAssetSync needs local filesystem access to import files from outside the Vault. It reads only the external Markdown files you explicitly select and the local assets referenced by those files. This plugin does not upload content, make network requests, or collect telemetry.
 
-Imported Markdown, images, and attachments are written to the Vault through Obsidian's Vault API. MdAssetSync lists Vault folders only to populate the Markdown destination picker; it does not use direct filesystem access to inspect Vault note contents.
+Imported Markdown, images, and attachments are written to the Vault through Obsidian's Vault API. MdAssetSync lists Vault folders only to populate the searchable Markdown destination picker and reads the active note's folder to offer it as a shortcut; it does not use direct filesystem access to inspect Vault note contents.
 
 ## Attachment behavior
 
