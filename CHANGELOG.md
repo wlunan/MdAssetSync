@@ -2,6 +2,20 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.1.0 - 2026-11-03
+
+### Non-image attachments
+
+- Add optional synchronization for non-image files referenced by imported Markdown.
+- Support disabled, PDF and office documents, all local attachments, and custom file extension modes.
+- Normalize custom extension lists from comma-, Chinese comma-, semicolon-, or whitespace-separated input.
+- Support Markdown inline links, reference links, Obsidian wiki links, wiki embeds, and HTML `<a>` links.
+- Resolve attachment paths from the original Markdown directory and mirror them into the configured Obsidian attachment location.
+- Reuse existing files with matching names and MD5 hashes, and apply the existing same-name collision strategy when content differs.
+- Preserve non-image attachment link and embed syntax while rewriting local paths.
+- Skip network links, non-file URI schemes, images handled by the image flow, and note-oriented Markdown, Canvas, and Base files.
+- Report missing images and attachments together in the import result.
+
 ## 1.0.2 - 2026-11-02
 
 ### Community directory review

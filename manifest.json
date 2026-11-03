@@ -1,9 +1,9 @@
 {
   "id": "md-asset-sync",
   "name": "MdAssetSync",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "minAppVersion": "1.8.0",
-  "description": "Import external Markdown files while resolving images from their original disk folders.",
-  "author": "MdAssetSync",
+  "description": "Import external Markdown with local images and optionally other attachments.",
+  "author": "lunan 公众号：小南与知更鸟",
   "isDesktopOnly": true
 }

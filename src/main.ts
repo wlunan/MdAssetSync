@@ -18,17 +18,20 @@ import { fileURLToPath } from "url";
 
 type CollisionStrategy = "append-md5" | "overwrite" | "skip";
 type PluginLanguage = "en" | "zh-CN";
+type AttachmentSyncMode = "off" | "office" | "all" | "custom";
 
 interface MdAssetSyncSettings {
 	language: PluginLanguage;
 	collisionStrategy: CollisionStrategy;
-	keepMissingImageLinks: boolean;
+	keepMissingAssetLinks: boolean;
+	attachmentSyncMode: AttachmentSyncMode;
+	customAttachmentExtensions: string;
 }
 
 interface ImportLog {
 	importedMarkdown: string[];
 	reusedAssets: string[];
-	missingImages: string[];
+	missingAssets: string[];
 	conflicts: string[];
 	errors: string[];
 	skippedRemoteOrEmbedded: number;
@@ -45,12 +48,29 @@ interface ParsedImageSyntax {
 	altText: string;
 	imageReference: string;
 	original: string;
+	isWikiEmbed?: boolean;
 	unresolvedReference?: string;
+}
+
+type AttachmentSyntaxKind = "markdown-inline" | "markdown-reference" | "wiki-link" | "wiki-embed" | "html-link";
+
+interface ParsedAttachmentSyntax {
+	alias?: string;
+	kind: AttachmentSyntaxKind;
+	label: string;
+	original: string;
+	reference: string;
+	unresolvedReference?: string;
+}
+
+interface AttachmentMatch {
+	kind: AttachmentSyntaxKind;
+	match: RegExpMatchArray;
 }
 
 const TRANSLATIONS = {
 	en: {
-		commandName: "Import external Markdown and sync images",
+		commandName: "Import external Markdown and sync assets",
 		desktopOnly: "MdAssetSync is available on Obsidian desktop only.",
 		importInProgress: "MdAssetSync: an import is already running. Wait for it to finish.",
 		progressPreparing: (target: string) => `MdAssetSync: preparing to import Markdown to ${target}…`,
@@ -58,14 +78,14 @@ const TRANSLATIONS = {
 			`MdAssetSync: importing ${current}/${total}: ${fileName}`,
 		cannotStartImport: "MdAssetSync: unable to start the import. See the developer console for details.",
 		pathIsNotFile: "The path is not a file.",
-		referenceDefinitionNotFound: (label: string) => `Image reference definition not found: ${label}`,
-		imageNotFound: "Image not found",
-		reusedSameName: "Same file name and content, reusing the existing image",
+		referenceDefinitionNotFound: (label: string) => `Reference definition not found: ${label}`,
+		assetNotFound: "Asset not found",
+		reusedSameName: "Same file name and content, reusing the existing asset",
 		skippedSameName: "Different file with the same name was skipped",
 		cannotOverwriteFolder: (folderPath: string) => `Cannot overwrite a folder with the same name: ${folderPath}`,
 		overwrittenSameName: "Different file with the same name was overwritten",
-		reusedMd5Conflict: "Reused a conflicting image with the same MD5",
-		conflictAppended: "Image conflict: an MD5 suffix was added",
+		reusedMd5Conflict: "Reused a conflicting asset with the same MD5",
+		conflictAppended: "Asset conflict: an MD5 suffix was added",
 		hashCompareFailed: "Could not compare the existing file; treating it as a conflict",
 		unsafeAttachmentFolder: "Ignoring an unsafe Obsidian attachment folder setting",
 		attachmentConfigReadFailed: "Could not read the Obsidian attachment setting; using the assets fallback",
@@ -74,39 +94,54 @@ const TRANSLATIONS = {
 		importFailed: "Failed to import Markdown",
 		reportHeading: "Import results",
 		reportImported: "Imported Markdown:",
-		reportReused: "Reused images:",
-		reportSkipped: "Skipped remote or embedded images:",
-		reportMissing: "Missing images:",
+		reportReused: "Reused assets:",
+		reportSkipped: "Skipped remote or embedded image references:",
+		reportMissing: "Missing assets:",
 		reportConflicts: "File conflicts:",
 		reportErrors: "Import errors:",
 		resultNotice: (imported: number, failed: number, missing: number, conflicts: number) =>
-			`MdAssetSync: ${imported} imported; ${failed} failed; ${missing} missing images; ${conflicts} conflicts. See the developer console for details.`,
+			`MdAssetSync: ${imported} imported; ${failed} failed; ${missing} missing assets; ${conflicts} conflicts. See the developer console for details.`,
 		settingsHeading: "MdAssetSync settings",
 		languageName: "Plugin language",
 		languageDesc: "Choose the language used by commands, settings, dialogs, and notifications.",
 		languageEnglish: "English",
 		languageChinese: "简体中文",
 		collisionName: "Same-name file strategy",
-		collisionDesc: "Same-name images are checked by MD5 first. Matching content is reused; different content follows this strategy.",
+		collisionDesc: "Same-name assets are checked by MD5 first. Matching content is reused; different content follows this strategy.",
 		collisionAppend: "Reuse matches; append MD5 when different",
 		collisionOverwrite: "Reuse matches; overwrite when different",
 		collisionSkip: "Reuse matches; warn and skip when different",
+		attachmentModeName: "Sync non-image attachments",
+		attachmentModeDesc:
+			"Choose which local files referenced by the imported Markdown should be copied. Images are always handled separately.",
+		attachmentModeOff: "Off",
+		attachmentModeOffice: "PDF and office documents",
+		attachmentModeAll: "All local attachments",
+		attachmentModeCustom: "Custom file extensions",
+		customExtensionsName: "Custom attachment extensions",
+		customExtensionsDesc:
+			"Separate extensions with commas or spaces. Leading dots are optional and wildcards are not supported. Leave empty to sync no non-image attachments.",
+		customExtensionsPlaceholder: "pdf, docx, xlsx, epub",
+		customExtensionsEmpty: "MdAssetSync: no custom attachment extensions are configured; only images will be synced.",
 		linkFormatName: "Output link format",
-		linkFormatDesc: "Output is fixed to standard Markdown image links ![](); this plugin does not generate wiki links.",
+		linkFormatDesc:
+			"Images are output as standard Markdown links ![](). Non-image attachments keep their original link or embed syntax with a rewritten local path.",
 		linkFormatValue: "Standard Markdown ![]()",
-		keepMissingName: "Keep original links for missing images",
-		keepMissingDesc: "When disabled, missing local image links are removed from the imported Markdown. Remote and base64 images are always kept.",
+		keepMissingName: "Keep original links for missing assets",
+		keepMissingDesc:
+			"When disabled, missing local image and attachment links are removed. Remote and base64 images are always kept.",
 		folderModalHeading: "Choose the Markdown import location",
-		folderModalDesc: "This choice controls only where Markdown files are written. Images follow the attachment location configured in Obsidian Settings → Files and links.",
+		folderModalDesc:
+			"This choice controls only where Markdown files are written. Assets follow the attachment location configured in Obsidian Settings → Files and links.",
 		markdownFolderName: "Markdown destination folder",
-		markdownFolderDesc: "Defaults to the vault root. This is independent of the attachment folder and does not affect image placement.",
+		markdownFolderDesc: "Defaults to the vault root. This is independent of the attachment folder and does not affect asset placement.",
 		vaultRoot: "Vault root",
 		cancel: "Cancel",
 		importHere: "Import here",
 		markdownFilter: "Markdown"
 	},
 	"zh-CN": {
-		commandName: "导入外部Markdown并同步图片资源",
+		commandName: "导入外部 Markdown 并同步资源",
 		desktopOnly: "MdAssetSync 仅支持 Obsidian 桌面端。",
 		importInProgress: "MdAssetSync：已有导入任务正在进行，请等待完成。",
 		progressPreparing: (target: string) => `MdAssetSync：将 Markdown 导入到 ${target}，正在准备…`,
@@ -114,14 +149,14 @@ const TRANSLATIONS = {
 			`MdAssetSync：正在导入 ${current}/${total}：${fileName}`,
 		cannotStartImport: "MdAssetSync：无法启动导入。详情见开发者控制台。",
 		pathIsNotFile: "路径不是文件",
-		referenceDefinitionNotFound: (label: string) => `找不到图片引用定义：${label}`,
-		imageNotFound: "找不到图片",
-		reusedSameName: "同名且内容相同，复用已有图片",
-		skippedSameName: "同名图片内容不同，已跳过",
+		referenceDefinitionNotFound: (label: string) => `找不到引用定义：${label}`,
+		assetNotFound: "找不到资源文件",
+		reusedSameName: "同名且内容相同，复用已有资源",
+		skippedSameName: "同名资源内容不同，已跳过",
 		cannotOverwriteFolder: (folderPath: string) => `无法覆盖同名文件夹：${folderPath}`,
-		overwrittenSameName: "同名图片内容不同，已覆盖",
-		reusedMd5Conflict: "已复用相同 MD5 的冲突图片",
-		conflictAppended: "同名图片冲突，已追加 MD5 后缀",
+		overwrittenSameName: "同名资源内容不同，已覆盖",
+		reusedMd5Conflict: "已复用相同 MD5 的冲突资源",
+		conflictAppended: "同名资源冲突，已追加 MD5 后缀",
 		hashCompareFailed: "无法比较同名文件内容，将按冲突处理",
 		unsafeAttachmentFolder: "忽略不安全的 Obsidian 附件目录配置",
 		attachmentConfigReadFailed: "无法读取 Obsidian 附件设置，将使用 assets 兜底目录",
@@ -130,32 +165,44 @@ const TRANSLATIONS = {
 		importFailed: "导入 Markdown 失败",
 		reportHeading: "导入结果",
 		reportImported: "成功导入 Markdown：",
-		reportReused: "复用已有图片：",
-		reportSkipped: "跳过网络或内嵌图片：",
-		reportMissing: "找不到的图片：",
+		reportReused: "复用已有资源：",
+		reportSkipped: "跳过网络或内嵌图片引用：",
+		reportMissing: "找不到的资源：",
 		reportConflicts: "冲突文件：",
 		reportErrors: "导入失败：",
 		resultNotice: (imported: number, failed: number, missing: number, conflicts: number) =>
-			`MdAssetSync：成功 ${imported} 个；失败 ${failed} 个；找不到图片 ${missing} 个；冲突 ${conflicts} 个。详情见开发者控制台。`,
+			`MdAssetSync：成功 ${imported} 个；失败 ${failed} 个；找不到资源 ${missing} 个；冲突 ${conflicts} 个。详情见开发者控制台。`,
 		settingsHeading: "MdAssetSync 设置",
 		languageName: "插件语言",
 		languageDesc: "选择命令、设置、弹窗和通知所使用的语言。",
 		languageEnglish: "English",
 		languageChinese: "简体中文",
 		collisionName: "同名文件策略",
-		collisionDesc: "同名图片会先比较 MD5：内容一致时直接复用；内容不一致时按下列策略处理。",
+		collisionDesc: "同名资源会先比较 MD5：内容一致时直接复用；内容不一致时按下列策略处理。",
 		collisionAppend: "相同复用；不同追加 MD5 后缀",
 		collisionOverwrite: "相同复用；不同直接覆盖",
 		collisionSkip: "相同复用；不同跳过并警告",
+		attachmentModeName: "同步图片以外的附件",
+		attachmentModeDesc: "选择是否复制外部 Markdown 引用的本地附件。图片始终由独立流程处理。",
+		attachmentModeOff: "关闭",
+		attachmentModeOffice: "PDF 和办公文档",
+		attachmentModeAll: "所有本地附件",
+		attachmentModeCustom: "自定义后缀",
+		customExtensionsName: "自定义附件后缀",
+		customExtensionsDesc: "使用逗号或空格分隔，开头点号可省略，不支持通配符；留空表示不同步非图片附件。",
+		customExtensionsPlaceholder: "pdf, docx, xlsx, epub",
+		customExtensionsEmpty: "MdAssetSync：尚未配置自定义附件后缀，本次只会同步图片。",
 		linkFormatName: "输出链接格式",
-		linkFormatDesc: "固定为标准 Markdown 图片链接 ![]()；本插件不生成 Wiki 链接。",
+		linkFormatDesc:
+			"图片固定输出为标准 Markdown 链接 ![]()；非图片附件保留原链接或嵌入语法，仅改写本地路径。",
 		linkFormatValue: "标准 Markdown ![]()",
-		keepMissingName: "保留找不到图片的原始链接",
-		keepMissingDesc: "关闭后，找不到的本地图片会从 Markdown 正文移除；网络和 base64 图片始终保留。",
+		keepMissingName: "保留找不到资源的原始链接",
+		keepMissingDesc: "关闭后，找不到的本地图片和附件会从 Markdown 正文移除；网络和 base64 图片始终保留。",
 		folderModalHeading: "选择 Markdown 导入位置",
-		folderModalDesc: "此选择只决定 Markdown 文件的位置。图片会单独遵循 Obsidian“设置 → 文件与链接”中的附件默认存放位置。",
+		folderModalDesc:
+			"此选择只决定 Markdown 文件的位置。图片和附件会遵循 Obsidian“设置 → 文件与链接”中的附件默认存放位置。",
 		markdownFolderName: "Markdown 目标文件夹",
-		markdownFolderDesc: "默认 Vault 根目录。这里独立于附件目录，图片不会依据此选项决定存放位置。",
+		markdownFolderDesc: "默认 Vault 根目录。这里独立于附件目录，资源文件不会依据此选项决定存放位置。",
 		vaultRoot: "Vault 根目录",
 		cancel: "取消",
 		importHere: "导入到此位置",
@@ -168,14 +215,38 @@ type Translation = (typeof TRANSLATIONS)["en"];
 const DEFAULT_SETTINGS: MdAssetSyncSettings = {
 	language: "en",
 	collisionStrategy: "append-md5",
-	keepMissingImageLinks: true
+	keepMissingAssetLinks: true,
+	attachmentSyncMode: "off",
+	customAttachmentExtensions: ""
 };
+const ATTACHMENT_SYNC_MODES: AttachmentSyncMode[] = ["off", "office", "all", "custom"];
 
 // Supports inline Markdown images, reference-style images, and Obsidian embeds.
 const IMAGE_SYNTAX_PATTERN =
 	/!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|!\[([^\]\n]*)\]\[([^\]\n]*)\]|!\[\[([^\]\n]+)\]\]|!\[([^\]\n]+)\](?![\[(])|<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/gi;
 const REFERENCE_DEFINITION_PATTERN =
 	/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*\r?$/gm;
+const ATTACHMENT_INLINE_PATTERN =
+	/(?<!!)\[([^\]\n]+)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+const ATTACHMENT_REFERENCE_PATTERN = /(?<!!)\[([^\]\n]+)\]\[([^\]\n]*)\]/g;
+const WIKI_LINK_PATTERN = /(?<!!)\[\[([^\]\n]+)\]\]/g;
+const WIKI_EMBED_PATTERN = /!\[\[([^\]\n]+)\]\]/g;
+const HTML_ATTACHMENT_PATTERN = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>[\s\S]*?<\/a>/gi;
+
+const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
+const EXCLUDED_ATTACHMENT_EXTENSIONS = new Set(["base", "canvas", "markdown", "md"]);
+const OFFICE_ATTACHMENT_EXTENSIONS = new Set([
+	"pdf",
+	"doc",
+	"docx",
+	"xls",
+	"xlsx",
+	"ppt",
+	"pptx",
+	"txt",
+	"rtf",
+	"csv"
+]);
 
 export default class MdAssetSyncPlugin extends Plugin {
 	settings: MdAssetSyncSettings = DEFAULT_SETTINGS;
@@ -197,11 +268,26 @@ export default class MdAssetSyncPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		const savedSettings = (await this.loadData()) as Partial<MdAssetSyncSettings> | null;
-		this.settings = { ...DEFAULT_SETTINGS, ...savedSettings };
+		const savedSettings = (await this.loadData()) as
+			| (Partial<MdAssetSyncSettings> & { keepMissingImageLinks?: boolean })
+			| null;
+		const { keepMissingImageLinks, ...storedSettings } = savedSettings ?? {};
+		this.settings = { ...DEFAULT_SETTINGS, ...storedSettings };
+		if (typeof savedSettings?.keepMissingAssetLinks === "boolean") {
+			this.settings.keepMissingAssetLinks = savedSettings.keepMissingAssetLinks;
+		} else if (typeof keepMissingImageLinks === "boolean") {
+			this.settings.keepMissingAssetLinks = keepMissingImageLinks;
+		}
 		if (!Object.hasOwn(TRANSLATIONS, this.settings.language)) {
 			this.settings.language = DEFAULT_SETTINGS.language;
 		}
+		if (!ATTACHMENT_SYNC_MODES.includes(this.settings.attachmentSyncMode)) {
+			this.settings.attachmentSyncMode = DEFAULT_SETTINGS.attachmentSyncMode;
+		}
+		this.settings.customAttachmentExtensions =
+			typeof this.settings.customAttachmentExtensions === "string"
+				? normalizeCustomExtensions(this.settings.customAttachmentExtensions).join(", ")
+				: DEFAULT_SETTINGS.customAttachmentExtensions;
 	}
 
 	async saveSettings(): Promise<void> {
@@ -245,11 +331,17 @@ export default class MdAssetSyncPlugin extends Plugin {
 			if (targetFolder === null) {
 				return;
 			}
+			if (
+				this.settings.attachmentSyncMode === "custom" &&
+				normalizeCustomExtensions(this.settings.customAttachmentExtensions).length === 0
+			) {
+				new Notice(this.t().customExtensionsEmpty, 6000);
+			}
 			const targetFolderLabel = targetFolder || this.t().vaultRoot;
 			const log: ImportLog = {
 				importedMarkdown: [],
 				reusedAssets: [],
-				missingImages: [],
+				missingAssets: [],
 				conflicts: [],
 				errors: [],
 				skippedRemoteOrEmbedded: 0
@@ -282,8 +374,14 @@ export default class MdAssetSyncPlugin extends Plugin {
 		const originalDir = path.dirname(sourcePath);
 		const sourceMarkdown = await fs.readFile(sourcePath, "utf8");
 		const destinationPath = await this.reserveMarkdownPath(targetFolder, path.basename(sourcePath), log);
-		const transformedMarkdown = await this.syncImagesInMarkdown(
+		const markdownWithImages = await this.syncImagesInMarkdown(
 			sourceMarkdown,
+			originalDir,
+			destinationPath,
+			log
+		);
+		const transformedMarkdown = await this.syncAttachmentsInMarkdown(
+			markdownWithImages,
 			originalDir,
 			destinationPath,
 			log
@@ -328,7 +426,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 			}
 			if (parsedImage.unresolvedReference) {
 				const message = this.t().referenceDefinitionNotFound(parsedImage.unresolvedReference);
-				log.missingImages.push(`${destinationMarkdownPath} ← ${message}`);
+				log.missingAssets.push(`${destinationMarkdownPath} ← ${message}`);
 				console.warn(`[MdAssetSync] ${message}`);
 				output += parsedImage.original;
 				continue;
@@ -336,13 +434,18 @@ export default class MdAssetSyncPlugin extends Plugin {
 
 			const altText = parsedImage.altText;
 			const imageReference = parsedImage.imageReference;
-			if (isRemoteOrEmbeddedImage(imageReference)) {
+			if (parsedImage.isWikiEmbed && !isImageReference(imageReference)) {
+				output += parsedImage.original;
+				continue;
+			}
+			if (isNonLocalReference(imageReference)) {
 				log.skippedRemoteOrEmbedded += 1;
 				output += parsedImage.original;
 				continue;
 			}
 
-			const localImagePath = resolveExternalImagePath(originalDir, imageReference);
+			const { fileReference: imageFileReference, suffix: imageSuffix } = splitReferenceSuffix(imageReference);
+			const localImagePath = resolveExternalAssetPath(originalDir, imageFileReference);
 			let assetVaultPath = copiedAssets.get(localImagePath);
 
 			if (!assetVaultPath) {
@@ -357,7 +460,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 						await this.ensureVaultFolder(attachmentFolder);
 						attachmentFolderPrepared = true;
 					}
-					assetVaultPath = await this.copyImageToVault(
+					assetVaultPath = await this.copyAssetToVault(
 						localImagePath,
 						imageBytes,
 						attachmentFolder,
@@ -368,8 +471,8 @@ export default class MdAssetSyncPlugin extends Plugin {
 					}
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					log.missingImages.push(`${destinationMarkdownPath} ← ${imageReference} (${message})`);
-					console.warn(`[MdAssetSync] ${this.t().imageNotFound}`, {
+					log.missingAssets.push(`${destinationMarkdownPath} ← ${imageReference} (${message})`);
+					console.warn(`[MdAssetSync] ${this.t().assetNotFound}`, {
 						destinationMarkdownPath,
 						imageReference,
 						localImagePath,
@@ -380,8 +483,8 @@ export default class MdAssetSyncPlugin extends Plugin {
 
 			if (assetVaultPath) {
 				const relativePath = makeVaultRelativePath(destinationDirectory, assetVaultPath);
-				output += `![${escapeMarkdownAltText(altText)}](${escapeMarkdownDestination(relativePath)})`;
-			} else if (this.settings.keepMissingImageLinks) {
+				output += `![${escapeMarkdownAltText(altText)}](${escapeAttachmentMarkdownDestination(relativePath, imageSuffix)})`;
+			} else if (this.settings.keepMissingAssetLinks) {
 				output += parsedImage.original;
 			}
 		}
@@ -390,14 +493,123 @@ export default class MdAssetSyncPlugin extends Plugin {
 		return output;
 	}
 
-	private async copyImageToVault(
-		localImagePath: string,
-		imageBytes: Buffer,
+	private async syncAttachmentsInMarkdown(
+		markdown: string,
+		originalDir: string,
+		destinationMarkdownPath: string,
+		log: ImportLog
+	): Promise<string> {
+		if (this.settings.attachmentSyncMode === "off") {
+			return markdown;
+		}
+
+		const customExtensions = normalizeCustomExtensions(this.settings.customAttachmentExtensions);
+		if (this.settings.attachmentSyncMode === "custom" && customExtensions.length === 0) {
+			return markdown;
+		}
+
+		const codeMaskedMarkdown = maskCodeSegments(markdown);
+		const referenceDefinitions = collectReferenceDefinitions(markdown, codeMaskedMarkdown);
+		const matches = collectAttachmentMatches(markdown, codeMaskedMarkdown);
+		if (matches.length === 0) {
+			return markdown;
+		}
+
+		const copiedAssets = new Map<string, string>();
+		let output = "";
+		let cursor = 0;
+		const destinationDirectory = parentVaultPath(destinationMarkdownPath);
+		const attachmentFolder = this.getAttachmentFolder(destinationMarkdownPath);
+		let attachmentFolderPrepared = false;
+
+		for (const entry of matches) {
+			const matchStart = entry.match.index ?? 0;
+			output += markdown.slice(cursor, matchStart);
+			cursor = matchStart + entry.match[0].length;
+
+			const parsedAttachment = parseAttachmentSyntax(entry, referenceDefinitions);
+			if (!parsedAttachment) {
+				output += entry.match[0];
+				continue;
+			}
+			if (parsedAttachment.unresolvedReference) {
+				const message = this.t().referenceDefinitionNotFound(parsedAttachment.unresolvedReference);
+				log.missingAssets.push(`${destinationMarkdownPath} ← ${message}`);
+				console.warn(`[MdAssetSync] ${message}`);
+				output += parsedAttachment.original;
+				continue;
+			}
+
+			if (isNonLocalReference(parsedAttachment.reference)) {
+				output += parsedAttachment.original;
+				continue;
+			}
+
+			const { fileReference, suffix } = splitReferenceSuffix(parsedAttachment.reference);
+			const extension = getReferenceExtension(fileReference);
+			if (
+				!isAttachmentExtensionEnabled(
+					extension,
+					this.settings.attachmentSyncMode,
+					customExtensions
+				)
+			) {
+				output += parsedAttachment.original;
+				continue;
+			}
+
+			const localAssetPath = resolveExternalAssetPath(originalDir, fileReference);
+			let assetVaultPath = copiedAssets.get(localAssetPath);
+
+			if (!assetVaultPath) {
+				try {
+					const assetStats = await fs.stat(localAssetPath);
+					if (!assetStats.isFile()) {
+						output += parsedAttachment.original;
+						continue;
+					}
+
+					const assetBytes = await fs.readFile(localAssetPath);
+					if (!attachmentFolderPrepared) {
+						await this.ensureVaultFolder(attachmentFolder);
+						attachmentFolderPrepared = true;
+					}
+					assetVaultPath = await this.copyAssetToVault(localAssetPath, assetBytes, attachmentFolder, log);
+					if (assetVaultPath) {
+						copiedAssets.set(localAssetPath, assetVaultPath);
+					}
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					log.missingAssets.push(`${destinationMarkdownPath} ← ${fileReference} (${message})`);
+					console.warn(`[MdAssetSync] ${this.t().assetNotFound}`, {
+						destinationMarkdownPath,
+						attachmentReference: fileReference,
+						localAssetPath,
+						error
+					});
+				}
+			}
+
+			if (assetVaultPath) {
+				const relativePath = makeVaultRelativePath(destinationDirectory, assetVaultPath);
+				output += rewriteAttachmentSyntax(parsedAttachment, relativePath, suffix);
+			} else if (this.settings.keepMissingAssetLinks) {
+				output += parsedAttachment.original;
+			}
+		}
+
+		output += markdown.slice(cursor);
+		return output;
+	}
+
+	private async copyAssetToVault(
+		localAssetPath: string,
+		assetBytes: Buffer,
 		attachmentFolder: string,
 		log: ImportLog
 	): Promise<string | undefined> {
-		const originalName = path.basename(localImagePath);
-		const sourceHash = createHash("md5").update(imageBytes).digest("hex");
+		const originalName = path.basename(localAssetPath);
+		const sourceHash = createHash("md5").update(assetBytes).digest("hex");
 		let candidatePath = joinVaultPath(attachmentFolder, originalName);
 		let existing = this.app.vault.getAbstractFileByPath(candidatePath);
 
@@ -419,7 +631,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 					throw new Error(this.t().cannotOverwriteFolder(candidatePath));
 				}
 				// Existing binary attachments must be updated through Vault as well.
-				await this.app.vault.modifyBinary(existing, bufferToArrayBuffer(imageBytes));
+				await this.app.vault.modifyBinary(existing, bufferToArrayBuffer(assetBytes));
 				console.warn(`[MdAssetSync] ${this.t().overwrittenSameName}`, candidatePath);
 				return candidatePath;
 			}
@@ -438,7 +650,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 		}
 
 		// createBinary is the Vault API equivalent of create for binary files.
-		await this.app.vault.createBinary(candidatePath, bufferToArrayBuffer(imageBytes));
+		await this.app.vault.createBinary(candidatePath, bufferToArrayBuffer(assetBytes));
 		return candidatePath;
 	}
 
@@ -558,13 +770,13 @@ export default class MdAssetSyncPlugin extends Plugin {
 		console.info(strings.reportImported, log.importedMarkdown.length, log.importedMarkdown);
 		console.info(strings.reportReused, log.reusedAssets.length, log.reusedAssets);
 		console.info(strings.reportSkipped, log.skippedRemoteOrEmbedded);
-		if (log.missingImages.length > 0) console.warn(strings.reportMissing, log.missingImages);
+		if (log.missingAssets.length > 0) console.warn(strings.reportMissing, log.missingAssets);
 		if (log.conflicts.length > 0) console.warn(strings.reportConflicts, log.conflicts);
 		if (log.errors.length > 0) console.error(strings.reportErrors, log.errors);
 		console.groupEnd();
 
 		new Notice(
-			strings.resultNotice(log.importedMarkdown.length, log.errors.length, log.missingImages.length, log.conflicts.length),
+			strings.resultNotice(log.importedMarkdown.length, log.errors.length, log.missingAssets.length, log.conflicts.length),
 			8000
 		);
 	}
@@ -598,6 +810,38 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName(strings.attachmentModeName)
+			.setDesc(strings.attachmentModeDesc)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("off", strings.attachmentModeOff)
+					.addOption("office", strings.attachmentModeOffice)
+					.addOption("all", strings.attachmentModeAll)
+					.addOption("custom", strings.attachmentModeCustom)
+					.setValue(this.plugin.settings.attachmentSyncMode)
+					.onChange(async (value) => {
+						this.plugin.settings.attachmentSyncMode = value as AttachmentSyncMode;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		if (this.plugin.settings.attachmentSyncMode === "custom") {
+			new Setting(containerEl)
+				.setName(strings.customExtensionsName)
+				.setDesc(strings.customExtensionsDesc)
+				.addText((text) =>
+					text
+						.setPlaceholder(strings.customExtensionsPlaceholder)
+						.setValue(this.plugin.settings.customAttachmentExtensions)
+						.onChange(async (value) => {
+							this.plugin.settings.customAttachmentExtensions = value;
+							await this.plugin.saveSettings();
+						})
+				);
+		}
+
+		new Setting(containerEl)
 			.setName(strings.collisionName)
 			.setDesc(strings.collisionDesc)
 			.addDropdown((dropdown) =>
@@ -621,8 +865,8 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 			.setName(strings.keepMissingName)
 			.setDesc(strings.keepMissingDesc)
 			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.keepMissingImageLinks).onChange(async (value) => {
-					this.plugin.settings.keepMissingImageLinks = value;
+				toggle.setValue(this.plugin.settings.keepMissingAssetLinks).onChange(async (value) => {
+					this.plugin.settings.keepMissingAssetLinks = value;
 					await this.plugin.saveSettings();
 				})
 			);
@@ -820,7 +1064,7 @@ function parseImageSyntax(match: RegExpMatchArray, definitions: Map<string, stri
 		const [rawTarget, ...aliasParts] = match[5].split("|");
 		const imageReference = rawTarget.trim();
 		const altText = aliasParts.join("|").trim() || path.basename(imageReference, path.extname(imageReference));
-		return { altText, imageReference, original };
+		return { altText, imageReference, original, isWikiEmbed: true };
 	}
 
 	if (match[6] !== undefined) {
@@ -839,17 +1083,192 @@ function parseImageSyntax(match: RegExpMatchArray, definitions: Map<string, stri
 	return null;
 }
 
+function collectAttachmentMatches(markdown: string, codeMaskedMarkdown: string): AttachmentMatch[] {
+	const patterns: Array<[AttachmentSyntaxKind, RegExp]> = [
+		["markdown-inline", ATTACHMENT_INLINE_PATTERN],
+		["markdown-reference", ATTACHMENT_REFERENCE_PATTERN],
+		["wiki-link", WIKI_LINK_PATTERN],
+		["wiki-embed", WIKI_EMBED_PATTERN],
+		["html-link", HTML_ATTACHMENT_PATTERN]
+	];
+	const candidates: AttachmentMatch[] = [];
+
+	for (const [kind, pattern] of patterns) {
+		for (const match of markdown.matchAll(pattern)) {
+			const start = match.index ?? 0;
+			if (codeMaskedMarkdown[start] !== " ") {
+				candidates.push({ kind, match });
+			}
+		}
+	}
+
+	candidates.sort((left, right) => {
+		const startDifference = (left.match.index ?? 0) - (right.match.index ?? 0);
+		return startDifference || right.match[0].length - left.match[0].length;
+	});
+
+	const matches: AttachmentMatch[] = [];
+	let consumedUntil = 0;
+	for (const candidate of candidates) {
+		const start = candidate.match.index ?? 0;
+		if (start < consumedUntil) {
+			continue;
+		}
+		matches.push(candidate);
+		consumedUntil = start + candidate.match[0].length;
+	}
+	return matches;
+}
+
+function parseAttachmentSyntax(
+	entry: AttachmentMatch,
+	definitions: Map<string, string>
+): ParsedAttachmentSyntax | null {
+	const original = entry.match[0];
+	switch (entry.kind) {
+		case "markdown-inline":
+			return {
+				kind: entry.kind,
+				label: entry.match[1],
+				original,
+				reference: removeAngleBrackets(entry.match[2])
+			};
+		case "markdown-reference": {
+			const label = entry.match[1];
+			const referenceLabel = entry.match[2]?.trim() || label;
+			const reference = definitions.get(normalizeReferenceLabel(referenceLabel));
+			return reference
+				? { kind: entry.kind, label, original, reference }
+				: { kind: entry.kind, label, original, reference: "", unresolvedReference: referenceLabel };
+		}
+		case "wiki-link":
+		case "wiki-embed": {
+			const [rawTarget, ...aliasParts] = entry.match[1].split("|");
+			return {
+				alias: aliasParts.join("|").trim() || undefined,
+				kind: entry.kind,
+				label: "",
+				original,
+				reference: rawTarget.trim()
+			};
+		}
+		case "html-link":
+			return {
+				kind: entry.kind,
+				label: "",
+				original,
+				reference: decodeHtmlEntities(entry.match[1] ?? entry.match[2] ?? "").trim()
+			};
+	}
+}
+
+function normalizeCustomExtensions(value: string): string[] {
+	return Array.from(
+		new Set(
+			value
+				.split(/[,\uFF0C;\s]+/)
+				.map((extension) => extension.trim().replace(/^\.+/, "").toLowerCase())
+				.filter((extension) => extension.length > 0 && !/[\\/.*?]/.test(extension))
+		)
+	).sort((left, right) => left.localeCompare(right));
+}
+
+function splitReferenceSuffix(reference: string): { fileReference: string; suffix: string } {
+	const suffixIndex = reference.search(/[?#]/);
+	return suffixIndex === -1
+		? { fileReference: reference, suffix: "" }
+		: { fileReference: reference.slice(0, suffixIndex), suffix: reference.slice(suffixIndex) };
+}
+
+function getReferenceExtension(reference: string): string {
+	const unescapedReference = unescapeMarkdownText(reference.trim());
+	let pathReference = removeAngleBrackets(unescapedReference);
+	if (/^file:/i.test(pathReference)) {
+		try {
+			pathReference = fileURLToPath(pathReference);
+		} catch {
+			return "";
+		}
+	}
+
+	const decodedReference = safelyDecodeUriComponent(pathReference).replace(/\\/g, "/");
+	const fileName = decodedReference.split("/").at(-1) ?? "";
+	const extensionIndex = fileName.lastIndexOf(".");
+	return extensionIndex > 0 ? fileName.slice(extensionIndex + 1).toLowerCase() : "";
+}
+
+function isImageReference(reference: string): boolean {
+	return IMAGE_EXTENSIONS.has(getReferenceExtension(splitReferenceSuffix(reference).fileReference));
+}
+
+function isAttachmentExtensionEnabled(
+	extension: string,
+	mode: AttachmentSyncMode,
+	customExtensions: string[]
+): boolean {
+	if (EXCLUDED_ATTACHMENT_EXTENSIONS.has(extension) || IMAGE_EXTENSIONS.has(extension)) {
+		return false;
+	}
+	if (mode === "office") {
+		return OFFICE_ATTACHMENT_EXTENSIONS.has(extension);
+	}
+	if (mode === "custom") {
+		return customExtensions.includes(extension);
+	}
+	return mode === "all";
+}
+
+function rewriteAttachmentSyntax(
+	attachment: ParsedAttachmentSyntax,
+	relativePath: string,
+	suffix: string
+): string {
+	switch (attachment.kind) {
+		case "markdown-inline":
+		case "markdown-reference":
+			return `[${escapeMarkdownAltText(attachment.label)}](${escapeAttachmentMarkdownDestination(relativePath, suffix)})`;
+		case "wiki-link": {
+			const alias = attachment.alias ? `|${attachment.alias}` : "";
+			return `[[${relativePath}${suffix}${alias}]]`;
+		}
+		case "wiki-embed": {
+			const alias = attachment.alias ? `|${attachment.alias}` : "";
+			return `![[${relativePath}${suffix}${alias}]]`;
+		}
+		case "html-link":
+			return replaceHtmlHref(attachment.original, escapeHtmlAttribute(relativePath, suffix));
+	}
+}
+
+function escapeAttachmentMarkdownDestination(relativePath: string, suffix: string): string {
+	return escapeMarkdownDestination(relativePath) + suffix.replace(/ /g, "%20");
+}
+
+function replaceHtmlHref(original: string, destination: string): string {
+	return original.replace(
+		/(\bhref\s*=\s*)(["'])(.*?)\2/i,
+		(_match, prefix: string, quote: string) => `${prefix}${quote}${destination}${quote}`
+	);
+}
+
+function escapeHtmlAttribute(relativePath: string, suffix: string): string {
+	return `${escapeMarkdownDestination(relativePath)}${suffix}`
+		.replace(/&/g, "&amp;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
 function normalizeReferenceLabel(label: string): string {
 	return unescapeMarkdownText(label).trim().replace(/\s+/g, " ").normalize("NFKC").toLocaleLowerCase();
 }
 
-function isRemoteOrEmbeddedImage(imagePath: string): boolean {
+function isNonLocalReference(imagePath: string): boolean {
 	const reference = imagePath.trim();
 	return /^(https?:\/\/|data:)/i.test(reference) || (/^[a-z][a-z0-9+.-]+:/i.test(reference) && !/^file:/i.test(reference));
 }
 
-function resolveExternalImagePath(originalDir: string, imageReference: string): string {
-	const unescapedReference = unescapeMarkdownText(imageReference.trim());
+function resolveExternalAssetPath(originalDir: string, assetReference: string): string {
+	const unescapedReference = unescapeMarkdownText(assetReference.trim());
 	if (/^file:/i.test(unescapedReference)) {
 		return path.normalize(fileURLToPath(unescapedReference));
 	}
