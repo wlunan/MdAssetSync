@@ -22,13 +22,13 @@ This plugin requires Obsidian 1.13.0 or later on desktop and uses Node.js filesy
 - Reuse an existing attachment when both the file name and MD5 match.
 - Handle same-name files with different content using append-MD5, overwrite, or skip strategies.
 - Keep network images, base64 images, and remote attachment links unchanged.
-- Show import progress and classify imported files, missing assets, conflicts, and errors in the developer console.
+- Show import progress and classify imported files, reused assets, missing assets, conflicts, and errors in an import-result dialog.
 
 ## Installation
 
 ### GitHub release
 
-1. Download `main.js` and `manifest.json` from the `1.1.1` GitHub release.
+1. Download `main.js` and `manifest.json` from the `1.1.2` GitHub release.
 2. Create or open `<Vault>/.obsidian/plugins/md-asset-sync/`.
 3. Copy `main.js` and `manifest.json` into that folder.
 4. Restart Obsidian or reload third-party plugins.
@@ -52,7 +52,7 @@ Copy `main.js` and `manifest.json` to the plugin folder in the vault.
 3. Click the MdAssetSync image icon on the left ribbon, or run **MdAssetSync: Import external Markdown and sync assets** from the command palette.
 4. Select one or more external Markdown files.
 5. Choose where the Markdown files should be written in the vault. The default is the vault root.
-6. Wait for the import to finish and review the result notification and developer console.
+6. Wait for the import to finish and review the result notification and import-result dialog.
 
 The Markdown destination and the attachment destination are independent. Changing the Markdown target folder does not change where assets are stored.
 
@@ -107,7 +107,7 @@ Open **Settings → Community plugins → MdAssetSync** and choose **Plugin lang
 - English
 - 简体中文
 
-The default is English. The command, settings, dialogs, progress messages, notifications, and developer console results use the selected language.
+The default is English. The command, settings, dialogs, progress messages, notifications, and import-result dialog use the selected language.
 
 ## Supported asset paths
 

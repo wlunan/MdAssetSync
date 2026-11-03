@@ -22,13 +22,13 @@ MdAssetSync 用于把外部 Markdown 文件导入 Obsidian，并保留解析本�
 - 文件名和 MD5 均相同的附件直接复用。
 - 同名但内容不同时，支持追加 MD5、覆盖或跳过。
 - 网络图片、base64 图片和远程附件链接保持原样。
-- 显示导入进度，并在开发者控制台分类输出成功、缺失资源、冲突和错误。
+- 显示导入进度，并在导入结果弹窗中分类展示成功、复用资源、缺失资源、冲突和错误。
 
 ## 安装
 
 ### GitHub Release
 
-1. 从 `1.1.1` GitHub Release 下载 `main.js` 和 `manifest.json`。
+1. 从 `1.1.2` GitHub Release 下载 `main.js` 和 `manifest.json`。
 2. 创建或打开 `<Vault>/.obsidian/plugins/md-asset-sync/`。
 3. 将 `main.js` 和 `manifest.json` 复制到该目录。
 4. 重启 Obsidian 或重载第三方插件。
@@ -52,7 +52,7 @@ npm run build
 3. 点击左侧 Ribbon 栏的 MdAssetSync 图片图标，或从命令面板执行“MdAssetSync: 导入外部 Markdown 并同步资源”。
 4. 选择一个或多个外部 Markdown 文件。
 5. 选择 Markdown 在 Vault 中的写入位置，默认是 Vault 根目录。
-6. 等待导入结束，查看结果通知和开发者控制台。
+6. 等待导入结束，查看结果通知和导入结果弹窗。
 
 Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录不会改变资源文件的位置。
 
@@ -107,7 +107,7 @@ pdf, docx, xlsx, epub, .drawio
 - English
 - 简体中文
 
-默认语言为 English。命令、设置、弹窗、进度提示、通知和开发者控制台结果会使用所选语言。
+默认语言为 English。命令、设置、弹窗、进度提示、通知和导入结果弹窗会使用所选语言。
 
 ## 支持的资源路径
 

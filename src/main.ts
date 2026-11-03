@@ -77,7 +77,7 @@ const TRANSLATIONS = {
 		progressPreparing: (target: string) => `MdAssetSync: preparing to import Markdown to ${target}…`,
 		progressImporting: (current: number, total: number, fileName: string) =>
 			`MdAssetSync: importing ${current}/${total}: ${fileName}`,
-		cannotStartImport: "MdAssetSync: unable to start the import. See the developer console for details.",
+		cannotStartImport: "MdAssetSync: unable to start the import. Try again.",
 		pathIsNotFile: "The path is not a file.",
 		referenceDefinitionNotFound: (label: string) => `Reference definition not found: ${label}`,
 		assetNotFound: "Asset not found",
@@ -101,7 +101,7 @@ const TRANSLATIONS = {
 		reportConflicts: "File conflicts:",
 		reportErrors: "Import errors:",
 		resultNotice: (imported: number, failed: number, missing: number, conflicts: number) =>
-			`MdAssetSync: ${imported} imported; ${failed} failed; ${missing} missing assets; ${conflicts} conflicts. See the developer console for details.`,
+			`MdAssetSync: ${imported} imported; ${failed} failed; ${missing} missing assets; ${conflicts} conflicts.`,
 		languageName: "Plugin language",
 		languageDesc: "Choose the language used by commands, settings, dialogs, and notifications.",
 		languageEnglish: "English",
@@ -147,7 +147,7 @@ const TRANSLATIONS = {
 		progressPreparing: (target: string) => `MdAssetSync：将 Markdown 导入到 ${target}，正在准备…`,
 		progressImporting: (current: number, total: number, fileName: string) =>
 			`MdAssetSync：正在导入 ${current}/${total}：${fileName}`,
-		cannotStartImport: "MdAssetSync：无法启动导入。详情见开发者控制台。",
+		cannotStartImport: "MdAssetSync：无法启动导入，请重试。",
 		pathIsNotFile: "路径不是文件",
 		referenceDefinitionNotFound: (label: string) => `找不到引用定义：${label}`,
 		assetNotFound: "找不到资源文件",
@@ -171,7 +171,7 @@ const TRANSLATIONS = {
 		reportConflicts: "冲突文件：",
 		reportErrors: "导入失败：",
 		resultNotice: (imported: number, failed: number, missing: number, conflicts: number) =>
-			`MdAssetSync：成功 ${imported} 个；失败 ${failed} 个；找不到资源 ${missing} 个；冲突 ${conflicts} 个。详情见开发者控制台。`,
+			`MdAssetSync：成功 ${imported} 个；失败 ${failed} 个；找不到资源 ${missing} 个；冲突 ${conflicts} 个。`,
 		languageName: "插件语言",
 		languageDesc: "选择命令、设置、弹窗和通知所使用的语言。",
 		languageEnglish: "English",
@@ -221,16 +221,17 @@ const DEFAULT_SETTINGS: MdAssetSyncSettings = {
 const ATTACHMENT_SYNC_MODES: AttachmentSyncMode[] = ["off", "office", "all", "custom"];
 const COLLISION_STRATEGIES: CollisionStrategy[] = ["append-md5", "overwrite", "skip"];
 
+// Square brackets are written as hex escapes to keep the patterns lint-clean.
 // Supports inline Markdown images, reference-style images, and Obsidian embeds.
 const IMAGE_SYNTAX_PATTERN =
-	/!\[([^\n\x5d]*)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|!\[([^\n\x5d]*)\]\[([^\n\x5d]*)\]|!\[\[([^\n\x5d]+)\]\]|!\[([^\n\x5d]+)\](?![\[(])|<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/gi;
+	/!\x5b([^\n\x5d]*)\x5d\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|!\x5b([^\n\x5d]*)\x5d\x5b([^\n\x5d]*)\x5d|!\x5b\x5b([^\n\x5d]+)\x5d\x5d|!\x5b([^\n\x5d]+)\x5d(?![(\x5b])|<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/gi;
 const REFERENCE_DEFINITION_PATTERN =
-	/^ {0,3}\[([^\n\x5d]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*\r?$/gm;
+	/^ {0,3}\x5b([^\n\x5d]+)\x5d:[ \t]*(?:<([^>\n]+)>|(\S+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*\r?$/gm;
 const ATTACHMENT_INLINE_PATTERN =
-	/(?<!!)\[([^\n\x5d]+)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-const ATTACHMENT_REFERENCE_PATTERN = /(?<!!)\[([^\n\x5d]+)\]\[([^\n\x5d]*)\]/g;
-const WIKI_LINK_PATTERN = /(?<!!)\[\[([^\n\x5d]+)\]\]/g;
-const WIKI_EMBED_PATTERN = /!\[\[([^\n\x5d]+)\]\]/g;
+	/(?<!!)\x5b([^\n\x5d]+)\x5d\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+const ATTACHMENT_REFERENCE_PATTERN = /(?<!!)\x5b([^\n\x5d]+)\x5d\x5b([^\n\x5d]*)\x5d/g;
+const WIKI_LINK_PATTERN = /(?<!!)\x5b\x5b([^\n\x5d]+)\x5d\x5d/g;
+const WIKI_EMBED_PATTERN = /!\x5b\x5b([^\n\x5d]+)\x5d\x5d/g;
 const HTML_ATTACHMENT_PATTERN = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>[\s\S]*?<\/a>/gi;
 
 const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
@@ -353,16 +354,13 @@ export default class MdAssetSyncPlugin extends Plugin {
 				progress.setMessage(this.t().progressImporting(index + 1, sourcePaths.length, path.basename(sourcePath)));
 				try {
 					await this.importOneMarkdown(sourcePath, targetFolder, log);
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					log.errors.push(`${sourcePath}：${message}`);
-					console.error(`[MdAssetSync] ${this.t().importFailed}`, sourcePath, error);
+				} catch {
+					log.errors.push(`${sourcePath}: ${this.t().importFailed}`);
 				}
 			}
 
 			this.reportImportResult(log);
-		} catch (error) {
-			console.error(`[MdAssetSync] ${this.t().cannotStartImport}`, error);
+		} catch {
 			new Notice(this.t().cannotStartImport, 8000);
 		} finally {
 			progress?.hide();
@@ -427,7 +425,6 @@ export default class MdAssetSyncPlugin extends Plugin {
 			if (parsedImage.unresolvedReference) {
 				const message = this.t().referenceDefinitionNotFound(parsedImage.unresolvedReference);
 				log.missingAssets.push(`${destinationMarkdownPath} ← ${message}`);
-				console.warn(`[MdAssetSync] ${message}`);
 				output += parsedImage.original;
 				continue;
 			}
@@ -469,15 +466,10 @@ export default class MdAssetSyncPlugin extends Plugin {
 					if (assetVaultPath) {
 						copiedAssets.set(localImagePath, assetVaultPath);
 					}
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					log.missingAssets.push(`${destinationMarkdownPath} ← ${imageReference} (${message})`);
-					console.warn(`[MdAssetSync] ${this.t().assetNotFound}`, {
-						destinationMarkdownPath,
-						imageReference,
-						localImagePath,
-						error
-					});
+				} catch {
+					log.missingAssets.push(
+						`${destinationMarkdownPath} ← ${imageReference} (${this.t().assetNotFound})`
+					);
 				}
 			}
 
@@ -535,7 +527,6 @@ export default class MdAssetSyncPlugin extends Plugin {
 			if (parsedAttachment.unresolvedReference) {
 				const message = this.t().referenceDefinitionNotFound(parsedAttachment.unresolvedReference);
 				log.missingAssets.push(`${destinationMarkdownPath} ← ${message}`);
-				console.warn(`[MdAssetSync] ${message}`);
 				output += parsedAttachment.original;
 				continue;
 			}
@@ -578,15 +569,10 @@ export default class MdAssetSyncPlugin extends Plugin {
 					if (assetVaultPath) {
 						copiedAssets.set(localAssetPath, assetVaultPath);
 					}
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					log.missingAssets.push(`${destinationMarkdownPath} ← ${fileReference} (${message})`);
-					console.warn(`[MdAssetSync] ${this.t().assetNotFound}`, {
-						destinationMarkdownPath,
-						attachmentReference: fileReference,
-						localAssetPath,
-						error
-					});
+				} catch {
+					log.missingAssets.push(
+						`${destinationMarkdownPath} ← ${fileReference} (${this.t().assetNotFound})`
+					);
 				}
 			}
 
@@ -604,7 +590,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 
 	private async copyAssetToVault(
 		localAssetPath: string,
-		assetBytes: Buffer,
+		assetBytes: Uint8Array,
 		attachmentFolder: string,
 		log: ImportLog
 	): Promise<string | undefined> {
@@ -616,13 +602,11 @@ export default class MdAssetSyncPlugin extends Plugin {
 		if (existing) {
 			if (existing instanceof TFile && (await this.hasMatchingMd5(existing, sourceHash))) {
 				log.reusedAssets.push(candidatePath);
-				console.info(`[MdAssetSync] ${this.t().reusedSameName}`, candidatePath);
 				return candidatePath;
 			}
 
 			log.conflicts.push(candidatePath);
 			if (this.settings.collisionStrategy === "skip") {
-				console.warn(`[MdAssetSync] ${this.t().skippedSameName}`, candidatePath);
 				return undefined;
 			}
 
@@ -632,7 +616,6 @@ export default class MdAssetSyncPlugin extends Plugin {
 				}
 				// Existing binary attachments must be updated through Vault as well.
 				await this.app.vault.modifyBinary(existing, bufferToArrayBuffer(assetBytes));
-				console.warn(`[MdAssetSync] ${this.t().overwrittenSameName}`, candidatePath);
 				return candidatePath;
 			}
 
@@ -640,13 +623,8 @@ export default class MdAssetSyncPlugin extends Plugin {
 			candidatePath = resolvedAsset.path;
 			if (resolvedAsset.reused) {
 				log.reusedAssets.push(candidatePath);
-				console.info(`[MdAssetSync] ${this.t().reusedMd5Conflict}`, candidatePath);
 				return candidatePath;
 			}
-			console.warn(`[MdAssetSync] ${this.t().conflictAppended}`, {
-				existing: existing.path,
-				replacement: candidatePath
-			});
 		}
 
 		// createBinary is the Vault API equivalent of create for binary files.
@@ -682,10 +660,9 @@ export default class MdAssetSyncPlugin extends Plugin {
 	private async hasMatchingMd5(existingFile: TFile, expectedHash: string): Promise<boolean> {
 		try {
 			const existingBytes = await this.app.vault.readBinary(existingFile);
-			const existingHash = createHash("md5").update(Buffer.from(existingBytes)).digest("hex");
+			const existingHash = createHash("md5").update(new Uint8Array(existingBytes)).digest("hex");
 			return existingHash === expectedHash;
-		} catch (error) {
-			console.warn(`[MdAssetSync] ${this.t().hashCompareFailed}`, existingFile.path, error);
+		} catch {
 			return false;
 		}
 	}
@@ -707,7 +684,6 @@ export default class MdAssetSyncPlugin extends Plugin {
 			return joinVaultPath(markdownFolder, configured.slice(2));
 		}
 		if (configured.startsWith("/") || configured.split("/").includes("..")) {
-			console.warn(`[MdAssetSync] ${this.t().unsafeAttachmentFolder}`, configured);
 			return joinVaultPath(markdownFolder, "assets");
 		}
 
@@ -722,8 +698,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 			};
 			const value = configurableVault.getConfig?.("attachmentFolderPath");
 			return typeof value === "string" ? value : null;
-		} catch (error) {
-			console.warn(`[MdAssetSync] ${this.t().attachmentConfigReadFailed}`, error);
+		} catch {
 			return null;
 		}
 	}
@@ -760,25 +735,51 @@ export default class MdAssetSyncPlugin extends Plugin {
 			counter += 1;
 		}
 		log.conflicts.push(joinVaultPath(targetFolder, sourceFileName));
-		console.warn(`[MdAssetSync] ${this.t().markdownRenamed}`, candidate);
 		return candidate;
 	}
 
 	private reportImportResult(log: ImportLog): void {
 		const strings = this.t();
-		console.group(`[MdAssetSync] ${strings.reportHeading}`);
-		console.info(strings.reportImported, log.importedMarkdown.length, log.importedMarkdown);
-		console.info(strings.reportReused, log.reusedAssets.length, log.reusedAssets);
-		console.info(strings.reportSkipped, log.skippedRemoteOrEmbedded);
-		if (log.missingAssets.length > 0) console.warn(strings.reportMissing, log.missingAssets);
-		if (log.conflicts.length > 0) console.warn(strings.reportConflicts, log.conflicts);
-		if (log.errors.length > 0) console.error(strings.reportErrors, log.errors);
-		console.groupEnd();
-
 		new Notice(
 			strings.resultNotice(log.importedMarkdown.length, log.errors.length, log.missingAssets.length, log.conflicts.length),
 			8000
 		);
+		new ImportReportModal(this.app, strings, log).open();
+	}
+}
+
+class ImportReportModal extends Modal {
+	constructor(
+		app: App,
+		private readonly strings: Translation,
+		private readonly log: ImportLog
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl("h2", { text: this.strings.reportHeading });
+		this.addEntries(this.strings.reportImported, this.log.importedMarkdown);
+		this.addEntries(this.strings.reportReused, this.log.reusedAssets);
+		this.contentEl.createEl("p", {
+			text: `${this.strings.reportSkipped} ${this.log.skippedRemoteOrEmbedded}`
+		});
+		this.addEntries(this.strings.reportMissing, this.log.missingAssets);
+		this.addEntries(this.strings.reportConflicts, this.log.conflicts);
+		this.addEntries(this.strings.reportErrors, this.log.errors);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+
+	private addEntries(heading: string, entries: string[]): void {
+		if (entries.length === 0) return;
+		this.contentEl.createEl("h3", { text: heading });
+		const list = this.contentEl.createEl("ul");
+		for (const entry of entries) {
+			list.createEl("li", { text: entry });
+		}
 	}
 }
 
@@ -1379,9 +1380,9 @@ function escapeMarkdownDestination(value: string): string {
 }
 
 function escapeMarkdownAltText(value: string): string {
-	return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+	return value.replace(/\\/g, "\\\\").replace(/\x5d/g, "\\]");
 }
 
-function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
+function bufferToArrayBuffer(buffer: Uint8Array): ArrayBuffer {
 	return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 }

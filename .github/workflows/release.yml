@@ -41,12 +41,45 @@ jobs:
               with:
                   subject-path: main.js
 
-            - name: Create draft release
+            - name: Create draft release if needed
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
+                  set -euo pipefail
                   tag="${GITHUB_REF#refs/tags/}"
-                  gh release create "$tag" \
-                    --title="$tag" \
-                    --draft \
-                    main.js manifest.json
+                  if ! gh release view "$tag" >/dev/null 2>&1; then
+                    gh release create "$tag" \
+                      --title="MdAssetSync $tag" \
+                      --draft \
+                      --generate-notes
+                  fi
+
+            - name: Upload release assets
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  set -euo pipefail
+                  tag="${GITHUB_REF#refs/tags/}"
+                  gh release upload "$tag" main.js manifest.json --clobber
+
+            - name: Verify release assets
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  set -euo pipefail
+                  tag="${GITHUB_REF#refs/tags/}"
+                  asset_names="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+                  for asset in main.js manifest.json; do
+                    if ! grep -Fxq "$asset" <<<"$asset_names"; then
+                      echo "Release $tag is missing required asset: $asset"
+                      exit 1
+                    fi
+                  done
+
+            - name: Publish verified release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  set -euo pipefail
+                  tag="${GITHUB_REF#refs/tags/}"
+                  gh release edit "$tag" --draft=false --latest

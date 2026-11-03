@@ -2,6 +2,15 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.1.2 - 2026-11-03
+
+### Release reliability and community review
+
+- Upload `main.js` and `manifest.json` explicitly, verify both release assets, and then publish the GitHub release automatically.
+- Add local Node.js type declarations so community scanners do not treat the desktop filesystem APIs as `any`.
+- Remove unnecessary regular-expression escapes and unsafe exception handling.
+- Replace developer-console import summaries with an in-app import-result dialog.
+
 ## 1.1.1 - 2026-11-03
 
 ### Community directory review
