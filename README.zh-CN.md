@@ -4,7 +4,7 @@
 
 MdAssetSync 用于把外部 Markdown 文件导入 Obsidian，并保留解析本地资源所需的外部原始磁盘位置。例如 `./assets/image.png` 会以外部 Markdown 所在文件夹为基准解析，再把图片或可选附件复制到 Obsidian 原生附件设置指定的位置。
 
-本插件仅支持 Obsidian 桌面端，依赖 Node.js 文件系统能力。
+本插件要求 Obsidian 1.13.0 或更新版本的桌面端，并使用 Node.js 文件系统能力。
 
 ## 功能
 
@@ -26,9 +26,9 @@ MdAssetSync 用于把外部 Markdown 文件导入 Obsidian，并保留解析本�
 
 ## 安装
 
-### 使用发布包
+### GitHub Release
 
-1. 解压 `md-asset-sync-1.1.0.zip`。
+1. 从 `1.1.1` GitHub Release 下载 `main.js` 和 `manifest.json`。
 2. 创建或打开 `<Vault>/.obsidian/plugins/md-asset-sync/`。
 3. 将 `main.js` 和 `manifest.json` 复制到该目录。
 4. 重启 Obsidian 或重载第三方插件。
@@ -55,6 +55,12 @@ npm run build
 6. 等待导入结束，查看结果通知和开发者控制台。
 
 Markdown 目标目录与附件目录相互独立。修改 Markdown 目标目录不会改变资源文件的位置。
+
+## 隐私与文件访问
+
+MdAssetSync 需要本地文件系统权限，才能导入 Vault 之外的文件。插件只读取你通过系统文件选择框明确选中的外部 Markdown，以及这些文档引用的本地资源；不会上传内容、发起网络请求或收集遥测数据。
+
+导入的 Markdown、图片和附件均通过 Obsidian Vault API 写入 Vault。MdAssetSync 只会枚举 Vault 文件夹以填充 Markdown 目标目录选择器，不会通过直接文件系统访问检查 Vault 笔记内容。
 
 ## 附件行为
 

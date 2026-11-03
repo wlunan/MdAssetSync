@@ -6,15 +6,16 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	type SettingDefinitionItem,
 	setTooltip,
 	TFile,
 	TFolder,
 	normalizePath
 } from "obsidian";
-import { createHash } from "crypto";
-import { promises as fs } from "fs";
-import * as path from "path";
-import { fileURLToPath } from "url";
+import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type CollisionStrategy = "append-md5" | "overwrite" | "skip";
 type PluginLanguage = "en" | "zh-CN";
@@ -101,7 +102,6 @@ const TRANSLATIONS = {
 		reportErrors: "Import errors:",
 		resultNotice: (imported: number, failed: number, missing: number, conflicts: number) =>
 			`MdAssetSync: ${imported} imported; ${failed} failed; ${missing} missing assets; ${conflicts} conflicts. See the developer console for details.`,
-		settingsHeading: "MdAssetSync settings",
 		languageName: "Plugin language",
 		languageDesc: "Choose the language used by commands, settings, dialogs, and notifications.",
 		languageEnglish: "English",
@@ -172,7 +172,6 @@ const TRANSLATIONS = {
 		reportErrors: "导入失败：",
 		resultNotice: (imported: number, failed: number, missing: number, conflicts: number) =>
 			`MdAssetSync：成功 ${imported} 个；失败 ${failed} 个；找不到资源 ${missing} 个；冲突 ${conflicts} 个。详情见开发者控制台。`,
-		settingsHeading: "MdAssetSync 设置",
 		languageName: "插件语言",
 		languageDesc: "选择命令、设置、弹窗和通知所使用的语言。",
 		languageEnglish: "English",
@@ -220,17 +219,18 @@ const DEFAULT_SETTINGS: MdAssetSyncSettings = {
 	customAttachmentExtensions: ""
 };
 const ATTACHMENT_SYNC_MODES: AttachmentSyncMode[] = ["off", "office", "all", "custom"];
+const COLLISION_STRATEGIES: CollisionStrategy[] = ["append-md5", "overwrite", "skip"];
 
 // Supports inline Markdown images, reference-style images, and Obsidian embeds.
 const IMAGE_SYNTAX_PATTERN =
-	/!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|!\[([^\]\n]*)\]\[([^\]\n]*)\]|!\[\[([^\]\n]+)\]\]|!\[([^\]\n]+)\](?![\[(])|<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/gi;
+	/!\[([^\n\x5d]*)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|!\[([^\n\x5d]*)\]\[([^\n\x5d]*)\]|!\[\[([^\n\x5d]+)\]\]|!\[([^\n\x5d]+)\](?![\[(])|<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/gi;
 const REFERENCE_DEFINITION_PATTERN =
-	/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*\r?$/gm;
+	/^ {0,3}\[([^\n\x5d]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*\r?$/gm;
 const ATTACHMENT_INLINE_PATTERN =
-	/(?<!!)\[([^\]\n]+)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-const ATTACHMENT_REFERENCE_PATTERN = /(?<!!)\[([^\]\n]+)\]\[([^\]\n]*)\]/g;
-const WIKI_LINK_PATTERN = /(?<!!)\[\[([^\]\n]+)\]\]/g;
-const WIKI_EMBED_PATTERN = /!\[\[([^\]\n]+)\]\]/g;
+	/(?<!!)\[([^\n\x5d]+)\]\(\s*(<[^>\n]+>|(?:\\.|[^\s)])+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+const ATTACHMENT_REFERENCE_PATTERN = /(?<!!)\[([^\n\x5d]+)\]\[([^\n\x5d]*)\]/g;
+const WIKI_LINK_PATTERN = /(?<!!)\[\[([^\n\x5d]+)\]\]/g;
+const WIKI_EMBED_PATTERN = /!\[\[([^\n\x5d]+)\]\]/g;
 const HTML_ATTACHMENT_PATTERN = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>[\s\S]*?<\/a>/gi;
 
 const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
@@ -787,89 +787,126 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
-	display(): void {
-		const { containerEl } = this;
+	getSettingDefinitions(): SettingDefinitionItem[] {
 		const strings = this.plugin.t();
-		containerEl.empty();
-		new Setting(containerEl).setName(strings.settingsHeading).setHeading();
+		return [
+			{
+				name: strings.languageName,
+				desc: strings.languageDesc,
+				control: {
+					type: "dropdown",
+					key: "language",
+					defaultValue: DEFAULT_SETTINGS.language,
+					options: {
+						en: strings.languageEnglish,
+						"zh-CN": strings.languageChinese
+					}
+				}
+			},
+			{
+				name: strings.attachmentModeName,
+				desc: strings.attachmentModeDesc,
+				control: {
+					type: "dropdown",
+					key: "attachmentSyncMode",
+					defaultValue: DEFAULT_SETTINGS.attachmentSyncMode,
+					options: {
+						off: strings.attachmentModeOff,
+						office: strings.attachmentModeOffice,
+						all: strings.attachmentModeAll,
+						custom: strings.attachmentModeCustom
+					}
+				}
+			},
+			{
+				name: strings.customExtensionsName,
+				desc: strings.customExtensionsDesc,
+				visible: () => this.plugin.settings.attachmentSyncMode === "custom",
+				control: {
+					type: "text",
+					key: "customAttachmentExtensions",
+					defaultValue: DEFAULT_SETTINGS.customAttachmentExtensions,
+					placeholder: strings.customExtensionsPlaceholder
+				}
+			},
+			{
+				name: strings.collisionName,
+				desc: strings.collisionDesc,
+				control: {
+					type: "dropdown",
+					key: "collisionStrategy",
+					defaultValue: DEFAULT_SETTINGS.collisionStrategy,
+					options: {
+						"append-md5": strings.collisionAppend,
+						overwrite: strings.collisionOverwrite,
+						skip: strings.collisionSkip
+					}
+				}
+			},
+			{
+				name: strings.linkFormatName,
+				desc: strings.linkFormatDesc,
+				render: (setting) => {
+					setting.addText((text) => text.setValue(strings.linkFormatValue).setDisabled(true));
+				}
+			},
+			{
+				name: strings.keepMissingName,
+				desc: strings.keepMissingDesc,
+				control: {
+					type: "toggle",
+					key: "keepMissingAssetLinks",
+					defaultValue: DEFAULT_SETTINGS.keepMissingAssetLinks
+				}
+			}
+		];
+	}
 
-		new Setting(containerEl)
-			.setName(strings.languageName)
-			.setDesc(strings.languageDesc)
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption("en", strings.languageEnglish)
-					.addOption("zh-CN", strings.languageChinese)
-					.setValue(this.plugin.settings.language)
-					.onChange(async (value) => {
-						this.plugin.settings.language = value as PluginLanguage;
-						await this.plugin.saveSettings();
-						this.plugin.refreshInterfaceLabels();
-						this.display();
-					})
-			);
+	getControlValue(key: string): unknown {
+		return this.plugin.settings[key as keyof MdAssetSyncSettings];
+	}
 
-		new Setting(containerEl)
-			.setName(strings.attachmentModeName)
-			.setDesc(strings.attachmentModeDesc)
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption("off", strings.attachmentModeOff)
-					.addOption("office", strings.attachmentModeOffice)
-					.addOption("all", strings.attachmentModeAll)
-					.addOption("custom", strings.attachmentModeCustom)
-					.setValue(this.plugin.settings.attachmentSyncMode)
-					.onChange(async (value) => {
-						this.plugin.settings.attachmentSyncMode = value as AttachmentSyncMode;
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			);
-
-		if (this.plugin.settings.attachmentSyncMode === "custom") {
-			new Setting(containerEl)
-				.setName(strings.customExtensionsName)
-				.setDesc(strings.customExtensionsDesc)
-				.addText((text) =>
-					text
-						.setPlaceholder(strings.customExtensionsPlaceholder)
-						.setValue(this.plugin.settings.customAttachmentExtensions)
-						.onChange(async (value) => {
-							this.plugin.settings.customAttachmentExtensions = value;
-							await this.plugin.saveSettings();
-						})
-				);
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		let updateDefinitions = false;
+		switch (key) {
+			case "language":
+				if (typeof value !== "string" || !Object.hasOwn(TRANSLATIONS, value)) return;
+				this.plugin.settings.language = value as PluginLanguage;
+				this.plugin.refreshInterfaceLabels();
+				updateDefinitions = true;
+				break;
+			case "attachmentSyncMode":
+				if (
+					typeof value !== "string" ||
+					!ATTACHMENT_SYNC_MODES.includes(value as AttachmentSyncMode)
+				) {
+					return;
+				}
+				this.plugin.settings.attachmentSyncMode = value as AttachmentSyncMode;
+				updateDefinitions = true;
+				break;
+			case "customAttachmentExtensions":
+				if (typeof value !== "string") return;
+				this.plugin.settings.customAttachmentExtensions = normalizeCustomExtensions(value).join(", ");
+				break;
+			case "collisionStrategy":
+				if (typeof value !== "string" || !COLLISION_STRATEGIES.includes(value as CollisionStrategy)) {
+					return;
+				}
+				this.plugin.settings.collisionStrategy = value as CollisionStrategy;
+				break;
+			case "keepMissingAssetLinks":
+				if (typeof value !== "boolean") return;
+				this.plugin.settings.keepMissingAssetLinks = value;
+				break;
+			default:
+				return;
 		}
 
-		new Setting(containerEl)
-			.setName(strings.collisionName)
-			.setDesc(strings.collisionDesc)
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption("append-md5", strings.collisionAppend)
-					.addOption("overwrite", strings.collisionOverwrite)
-					.addOption("skip", strings.collisionSkip)
-					.setValue(this.plugin.settings.collisionStrategy)
-					.onChange(async (value) => {
-						this.plugin.settings.collisionStrategy = value as CollisionStrategy;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(strings.linkFormatName)
-			.setDesc(strings.linkFormatDesc)
-			.addText((text) => text.setValue(strings.linkFormatValue).setDisabled(true));
-
-		new Setting(containerEl)
-			.setName(strings.keepMissingName)
-			.setDesc(strings.keepMissingDesc)
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.keepMissingAssetLinks).onChange(async (value) => {
-					this.plugin.settings.keepMissingAssetLinks = value;
-					await this.plugin.saveSettings();
-				})
-			);
+		await this.plugin.saveSettings();
+		if (updateDefinitions) {
+			this.update();
+		}
 	}
 }
 
@@ -891,8 +928,7 @@ class VaultFolderPickerModal extends Modal {
 			text: this.strings.folderModalDesc
 		});
 		const folders = this.app.vault
-			.getAllLoadedFiles()
-			.filter((file): file is TFolder => file instanceof TFolder)
+			.getAllFolders()
 			.map((folder) => folder.path)
 			.filter((folderPath) => folderPath.length > 0)
 			.sort((left, right) => left.localeCompare(right, "zh-CN"));
@@ -964,12 +1000,11 @@ function getElectronDialog(): ElectronDialog | null {
 
 function chooseMarkdownFilesWithInput(): Promise<string[]> {
 	return new Promise((resolve) => {
-		const input = document.createElement("input");
+		const input = document.body.createEl("input");
 		input.type = "file";
 		input.accept = ".md,.markdown,text/markdown";
 		input.multiple = true;
 		input.setCssStyles({ display: "none" });
-		document.body.appendChild(input);
 
 		input.addEventListener(
 			"change",

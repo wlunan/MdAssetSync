@@ -2,6 +2,16 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.1.1 - 2026-11-03
+
+### Community directory review
+
+- Add a GitHub Actions release workflow that builds the plugin and creates verifiable build provenance attestations for `main.js`.
+- Adopt Obsidian's declarative settings API; version 1.1.1 now requires Obsidian 1.13.0 or later.
+- List Vault folders with `Vault.getAllFolders()` when choosing the Markdown destination.
+- Replace the fallback file picker's direct DOM creation with Obsidian's `createEl()` helper.
+- Document local filesystem access and privacy boundaries in both READMEs.
+
 ## 1.1.0 - 2026-11-03
 
 ### Non-image attachments

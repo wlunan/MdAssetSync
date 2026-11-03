@@ -4,7 +4,7 @@
 
 MdAssetSync imports external Markdown files into Obsidian while preserving the original disk location used to resolve local assets. A link such as `./assets/image.png` is resolved from the external Markdown file's original folder, then the image or optional attachment is copied into the location configured in Obsidian.
 
-This plugin is designed for Obsidian desktop and requires Node.js filesystem access.
+This plugin requires Obsidian 1.13.0 or later on desktop and uses Node.js filesystem access.
 
 ## Features
 
@@ -26,9 +26,9 @@ This plugin is designed for Obsidian desktop and requires Node.js filesystem acc
 
 ## Installation
 
-### Release archive
+### GitHub release
 
-1. Extract `md-asset-sync-1.1.0.zip`.
+1. Download `main.js` and `manifest.json` from the `1.1.1` GitHub release.
 2. Create or open `<Vault>/.obsidian/plugins/md-asset-sync/`.
 3. Copy `main.js` and `manifest.json` into that folder.
 4. Restart Obsidian or reload third-party plugins.
@@ -55,6 +55,12 @@ Copy `main.js` and `manifest.json` to the plugin folder in the vault.
 6. Wait for the import to finish and review the result notification and developer console.
 
 The Markdown destination and the attachment destination are independent. Changing the Markdown target folder does not change where assets are stored.
+
+## Privacy and file access
+
+MdAssetSync needs local filesystem access to import files from outside the Vault. It reads only the external Markdown files you explicitly select and the local assets referenced by those files. This plugin does not upload content, make network requests, or collect telemetry.
+
+Imported Markdown, images, and attachments are written to the Vault through Obsidian's Vault API. MdAssetSync lists Vault folders only to populate the Markdown destination picker; it does not use direct filesystem access to inspect Vault note contents.
 
 ## Attachment behavior
 
