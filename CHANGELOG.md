@@ -2,6 +2,13 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.1.4 - 2026-11-03
+
+### Destination folder picker
+
+- Replace the destination dropdown with fuzzy folder search.
+- Prioritize the active note folder, the last-used destination, and the Vault root.
+
 ## 1.1.3 - 2026-11-03
 
 ### Folder imports
@@ -9,7 +16,6 @@ All notable changes to MdAssetSync are documented here.
 - Add an import-source choice that supports selecting either Markdown files or a source folder.
 - Recursively import `.md` and `.markdown` files from selected folders, while skipping hidden folders and `node_modules`.
 - Explain the file and folder import workflow in plugin settings and both READMEs.
-- Replace the destination dropdown with fuzzy folder search, prioritizing the active note folder, the last-used destination, and the Vault root.
 
 ## 1.1.2 - 2026-11-03
 
