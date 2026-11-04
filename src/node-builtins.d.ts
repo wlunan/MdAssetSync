@@ -13,6 +13,42 @@ declare module "node:crypto" {
 	export function createHash(algorithm: string): Hash;
 }
 
+declare module "node:http" {
+	interface IncomingMessage {
+		headers: Record<string, string | string[] | undefined>;
+		statusCode?: number;
+		on(eventName: "data", listener: (chunk: Uint8Array) => void): this;
+		on(eventName: "end", listener: () => void): this;
+		on(eventName: "error", listener: (error: Error) => void): this;
+		destroy(): this;
+		resume(): this;
+	}
+
+	interface RequestOptions {
+		headers?: Record<string, string>;
+		host?: string;
+		method?: string;
+		path?: string;
+		port?: number;
+		protocol?: string;
+	}
+
+	interface ClientRequest {
+		on(eventName: "response", listener: (response: IncomingMessage) => void): this;
+		on(eventName: "error", listener: (error: Error) => void): this;
+		setTimeout(timeoutMs: number, callback: () => void): this;
+		destroy(): this;
+	}
+
+	export function get(options: RequestOptions | string, callback?: (response: IncomingMessage) => void): ClientRequest;
+}
+
+declare module "node:https" {
+	import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
+
+	export function get(options: RequestOptions | string, callback?: (response: IncomingMessage) => void): ClientRequest;
+}
+
 declare module "node:fs" {
 	interface Stats {
 		isFile(): boolean;

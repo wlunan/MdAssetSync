@@ -2,6 +2,22 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.1.5 - 2026-11-04
+
+### Preview and offline images
+
+- Add a pre-import preview with Markdown count, image counts, issue lists, and explicit confirmation.
+- Add an optional download-remote-images setting, enabled only for http/https responses that report an image content type.
+- Apply timeout, 50 MB size, and same-name collision safeguards to remote downloads; failed downloads keep their original links.
+- Follow up to five http/https redirects, resolve relative `Location` headers, reject redirect loops, and refuse https-to-http downgrades.
+- Send a `User-Agent` header and derive the saved file extension from the redirect target or the response content type.
+
+### Fixes
+
+- Fix the destination folder picker reporting a selected folder as a cancellation, caused by the modal closing before the chosen item was handled.
+- Always offer the Vault root as a destination and report canceled or empty imports instead of returning silently.
+- Surface the real import error, and let one unreadable file fail on its own instead of aborting the whole batch.
+
 ## 1.1.4 - 2026-11-03
 
 ### Destination folder picker

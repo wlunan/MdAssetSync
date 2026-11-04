@@ -15,6 +15,8 @@ import {
 	normalizePath
 } from "obsidian";
 import { createHash } from "node:crypto";
+import * as http from "node:http";
+import * as https from "node:https";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +32,7 @@ interface MdAssetSyncSettings {
 	attachmentSyncMode: AttachmentSyncMode;
 	customAttachmentExtensions: string;
 	lastMarkdownFolder: string | null;
+	downloadRemoteImages: boolean;
 }
 
 interface ImportLog {
@@ -39,6 +42,17 @@ interface ImportLog {
 	conflicts: string[];
 	errors: string[];
 	skippedRemoteOrEmbedded: number;
+	downloadedRemoteImages: string[];
+	remoteDownloadFailures: string[];
+}
+
+interface MarkdownPreview {
+	sourcePath: string;
+	markdown: string;
+	issues: string[];
+	imageCount: number;
+	localImageCount: number;
+	remoteImageCount: number;
 }
 
 interface ElectronDialog {
@@ -81,6 +95,8 @@ const TRANSLATIONS = {
 		progressImporting: (current: number, total: number, fileName: string) =>
 			`MdAssetSync: importing ${current}/${total}: ${fileName}`,
 		cannotStartImport: "MdAssetSync: unable to start the import. Try again.",
+		importCanceled: "MdAssetSync: import canceled.",
+		noMarkdownSelected: "MdAssetSync: no Markdown files were selected.",
 		pathIsNotFile: "The path is not a file.",
 		referenceDefinitionNotFound: (label: string) => `Reference definition not found: ${label}`,
 		assetNotFound: "Asset not found",
@@ -96,9 +112,17 @@ const TRANSLATIONS = {
 		attachmentPathOccupied: (folderPath: string) => `Attachment folder path is occupied by a file: ${folderPath}`,
 		markdownRenamed: "A Markdown file with the same name was renamed for import",
 		importFailed: "Failed to import Markdown",
+		previewHeading: "Preview import",
+		previewSummary: (files: number, localImages: number, remoteImages: number) =>
+			`${files} Markdown file(s), ${localImages} local image(s), ${remoteImages} http/https image(s).`,
+		previewDownloadingDesc: "Remote images will be downloaded to the Vault after confirmation.",
+		previewIssueLabel: "Issues",
+		previewConfirm: "Import",
 		reportHeading: "Import results",
 		reportImported: "Imported Markdown:",
 		reportReused: "Reused assets:",
+		reportDownloaded: "Downloaded remote images:",
+		reportRemoteFailures: "Remote download failures:",
 		reportSkipped: "Skipped remote or embedded image references:",
 		reportMissing: "Missing assets:",
 		reportConflicts: "File conflicts:",
@@ -133,6 +157,9 @@ const TRANSLATIONS = {
 		keepMissingName: "Keep original links for missing assets",
 		keepMissingDesc:
 			"When disabled, missing local image and attachment links are removed. Remote and base64 images are always kept.",
+		downloadRemoteName: "Download remote images",
+		downloadRemoteDesc:
+			"Download http/https images to the Vault attachment location during import. Disabled by default; failures keep the original link.",
 		importUsageName: "Importing Markdown",
 		importUsageDesc:
 			"Run the import command, then choose Markdown files or a folder. Folder imports recursively include .md and .markdown files; hidden folders and node_modules are skipped. Imported notes are written to the destination you choose, without preserving the source folder structure.",
@@ -157,6 +184,8 @@ const TRANSLATIONS = {
 		progressImporting: (current: number, total: number, fileName: string) =>
 			`MdAssetSync：正在导入 ${current}/${total}：${fileName}`,
 		cannotStartImport: "MdAssetSync：无法启动导入，请重试。",
+		importCanceled: "MdAssetSync：已取消导入。",
+		noMarkdownSelected: "MdAssetSync：没有选择任何 Markdown 文件。",
 		pathIsNotFile: "路径不是文件",
 		referenceDefinitionNotFound: (label: string) => `找不到引用定义：${label}`,
 		assetNotFound: "找不到资源文件",
@@ -172,9 +201,17 @@ const TRANSLATIONS = {
 		attachmentPathOccupied: (folderPath: string) => `附件目录路径被文件占用：${folderPath}`,
 		markdownRenamed: "同名 Markdown 已改名导入",
 		importFailed: "导入 Markdown 失败",
+		previewHeading: "导入预览",
+		previewSummary: (files: number, localImages: number, remoteImages: number) =>
+			`${files} 个 Markdown；${localImages} 个本地图片；${remoteImages} 个 http/https 图片。`,
+		previewDownloadingDesc: "确认后将下载远程图片到 Vault。",
+		previewIssueLabel: "问题",
+		previewConfirm: "导入",
 		reportHeading: "导入结果",
 		reportImported: "成功导入 Markdown：",
 		reportReused: "复用已有资源：",
+		reportDownloaded: "已下载远程图片：",
+		reportRemoteFailures: "远程图片下载失败：",
 		reportSkipped: "跳过网络或内嵌图片引用：",
 		reportMissing: "找不到的资源：",
 		reportConflicts: "冲突文件：",
@@ -206,6 +243,9 @@ const TRANSLATIONS = {
 		linkFormatValue: "标准 Markdown ![]()",
 		keepMissingName: "保留找不到资源的原始链接",
 		keepMissingDesc: "关闭后，找不到的本地图片和附件会从 Markdown 正文移除；网络和 base64 图片始终保留。",
+		downloadRemoteName: "下载远程图片",
+		downloadRemoteDesc:
+			"导入时把 http/https 图片下载到 Vault 附件目录。默认关闭；下载失败时保留原始链接。",
 		importUsageName: "导入 Markdown",
 		importUsageDesc:
 			"运行导入命令后，可选择 Markdown 文件或文件夹。选择文件夹时会递归导入其中的 .md 和 .markdown 文件，并跳过隐藏文件夹和 node_modules。导入后的笔记会写入随后选择的目标目录，不保留源文件夹层级。",
@@ -232,7 +272,8 @@ const DEFAULT_SETTINGS: MdAssetSyncSettings = {
 	keepMissingAssetLinks: true,
 	attachmentSyncMode: "off",
 	customAttachmentExtensions: "",
-	lastMarkdownFolder: null
+	lastMarkdownFolder: null,
+	downloadRemoteImages: false
 };
 const ATTACHMENT_SYNC_MODES: AttachmentSyncMode[] = ["off", "office", "all", "custom"];
 const COLLISION_STRATEGIES: CollisionStrategy[] = ["append-md5", "overwrite", "skip"];
@@ -252,6 +293,30 @@ const HTML_ATTACHMENT_PATTERN = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]+)"|'([^']+)')[^
 
 const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
 const EXCLUDED_ATTACHMENT_EXTENSIONS = new Set(["base", "canvas", "markdown", "md"]);
+const IMAGE_CONTENT_TYPES = new Set([
+	"image/avif",
+	"image/bmp",
+	"image/gif",
+	"image/jpeg",
+	"image/jpg",
+	"image/png",
+	"image/svg+xml",
+	"image/webp"
+]);
+const IMAGE_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+	"image/avif": "avif",
+	"image/bmp": "bmp",
+	"image/gif": "gif",
+	"image/jpeg": "jpg",
+	"image/jpg": "jpg",
+	"image/png": "png",
+	"image/svg+xml": "svg",
+	"image/webp": "webp"
+};
+const MAX_IMAGE_SIZE = 50 * 1024 * 1024;
+const MAX_IMAGE_REDIRECTS = 5;
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 15000;
+const IMAGE_DOWNLOAD_USER_AGENT = "Mozilla/5.0 (compatible; MdAssetSync)";
 const OFFICE_ATTACHMENT_EXTENSIONS = new Set([
 	"pdf",
 	"doc",
@@ -273,6 +338,7 @@ export default class MdAssetSyncPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		console.info(`MdAssetSync: loaded v${this.manifest.version}, remote image downloads are ${this.settings.downloadRemoteImages ? "enabled" : "disabled"}`);
 
 		this.importCommand = this.addCommand({
 			id: "import-external-markdown-and-assets",
@@ -331,21 +397,25 @@ export default class MdAssetSyncPlugin extends Plugin {
 			new Notice(this.t().desktopOnly);
 			return;
 		}
+		console.info("MdAssetSync: import command triggered");
 		if (this.isImporting) {
 			new Notice(this.t().importInProgress);
 			return;
 		}
 
-		this.isImporting = true;
 		let progress: Notice | null = null;
 		try {
 			const sourcePaths = await chooseMarkdownFiles(this.app, this.t());
+			console.info(`MdAssetSync: source files selected: ${sourcePaths.length}`);
 			if (sourcePaths.length === 0) {
+				new Notice(this.t().noMarkdownSelected, 6000);
 				return;
 			}
 
 			const targetFolder = await chooseVaultFolder(this.app, this.t(), this.settings.lastMarkdownFolder);
+			console.info(`MdAssetSync: target folder selected: ${targetFolder ?? "canceled"}`);
 			if (targetFolder === null) {
+				new Notice(this.t().importCanceled, 6000);
 				return;
 			}
 			if (targetFolder !== this.settings.lastMarkdownFolder) {
@@ -359,13 +429,41 @@ export default class MdAssetSyncPlugin extends Plugin {
 				new Notice(this.t().customExtensionsEmpty, 6000);
 			}
 			const targetFolderLabel = targetFolder || this.t().vaultRoot;
+			const previews: MarkdownPreview[] = [];
+			const previewErrors: string[] = [];
+			for (const sourcePath of sourcePaths) {
+				try {
+					previews.push(await this.previewOneMarkdown(sourcePath));
+				} catch (error) {
+					console.error(`MdAssetSync: preview failed for ${sourcePath}`, error);
+					previewErrors.push(`${sourcePath}: ${describeImportError(error, this.t())}`);
+				}
+			}
+			console.info(`MdAssetSync: preview prepared for ${previews.length} file(s)`);
+			if (previews.length === 0) {
+				new Notice(this.t().cannotStartImport, 8000);
+				return;
+			}
+
+			const confirmed = await new Promise<boolean>((resolve) => {
+				new ImportPreviewModal(this.app, this.t(), previews, this.settings.downloadRemoteImages, resolve).open();
+			});
+			if (!confirmed) {
+				console.info("MdAssetSync: preview not confirmed");
+				return;
+			}
+			console.info("MdAssetSync: preview confirmed; starting import");
+
+			this.isImporting = true;
 			const log: ImportLog = {
 				importedMarkdown: [],
 				reusedAssets: [],
 				missingAssets: [],
 				conflicts: [],
-				errors: [],
-				skippedRemoteOrEmbedded: 0
+				errors: [...previewErrors],
+				skippedRemoteOrEmbedded: 0,
+				downloadedRemoteImages: [],
+				remoteDownloadFailures: []
 			};
 			progress = new Notice(this.t().progressPreparing(targetFolderLabel), 0);
 
@@ -374,13 +472,21 @@ export default class MdAssetSyncPlugin extends Plugin {
 				progress.setMessage(this.t().progressImporting(index + 1, sourcePaths.length, path.basename(sourcePath)));
 				try {
 					await this.importOneMarkdown(sourcePath, targetFolder, log);
-				} catch {
-					log.errors.push(`${sourcePath}: ${this.t().importFailed}`);
+				} catch (error) {
+					console.error(`MdAssetSync: failed to import ${sourcePath}`, error);
+					log.errors.push(`${sourcePath}: ${this.t().importFailed} (${describeImportError(error, this.t())})`);
 				}
 			}
 
+			console.info(
+				`MdAssetSync: import finished; imported ${log.importedMarkdown.length}, failed ${log.errors.length}, missing assets ${log.missingAssets.length}, conflicts ${log.conflicts.length}`
+			);
+			if (log.importedMarkdown.length > 0) {
+				console.info(`MdAssetSync: imported files: ${log.importedMarkdown.join(", ")}`);
+			}
 			this.reportImportResult(log);
-		} catch {
+		} catch (error) {
+			console.error("MdAssetSync: import failed", error);
 			new Notice(this.t().cannotStartImport, 8000);
 		} finally {
 			progress?.hide();
@@ -408,6 +514,60 @@ export default class MdAssetSyncPlugin extends Plugin {
 		// Markdown content is always created through the Vault API, so Obsidian indexes it immediately.
 		await this.app.vault.create(destinationPath, transformedMarkdown);
 		log.importedMarkdown.push(destinationPath);
+	}
+
+	private async previewOneMarkdown(sourcePath: string): Promise<MarkdownPreview> {
+		const markdown = await fs.readFile(sourcePath, "utf8");
+		const codeMaskedMarkdown = maskCodeSegments(markdown);
+		const referenceDefinitions = collectReferenceDefinitions(markdown, codeMaskedMarkdown);
+		const issues: string[] = [];
+		let localImageCount = 0;
+		let remoteImageCount = 0;
+
+		const matches = Array.from(markdown.matchAll(IMAGE_SYNTAX_PATTERN)).filter(
+			(match) => codeMaskedMarkdown[match.index ?? 0] !== " "
+		);
+		for (const match of matches) {
+			const parsedImage = parseImageSyntax(match, referenceDefinitions);
+			if (!parsedImage) {
+				continue;
+			}
+			if (parsedImage.unresolvedReference) {
+				issues.push(`${path.basename(sourcePath)} ← ${this.t().referenceDefinitionNotFound(parsedImage.unresolvedReference)}`);
+				continue;
+			}
+
+			const imageReference = parsedImage.imageReference;
+			if (parsedImage.isWikiEmbed && !isImageReference(imageReference)) {
+				continue;
+			}
+			if (/^https?:\/\//i.test(imageReference.trim())) {
+				remoteImageCount += 1;
+				continue;
+			}
+			if (isNonLocalReference(imageReference)) {
+				continue;
+			}
+
+			const localImagePath = resolveExternalAssetPath(path.dirname(sourcePath), splitReferenceSuffix(imageReference).fileReference);
+			try {
+				if (!(await fs.stat(localImagePath)).isFile()) {
+					throw new Error(this.t().pathIsNotFile);
+				}
+				localImageCount += 1;
+			} catch {
+				issues.push(`${path.basename(sourcePath)} ← ${imageReference} (${this.t().assetNotFound})`);
+			}
+		}
+
+		return {
+			sourcePath,
+			markdown,
+			issues,
+			imageCount: matches.length,
+			localImageCount,
+			remoteImageCount
+		};
 	}
 
 	private async syncImagesInMarkdown(
@@ -455,41 +615,58 @@ export default class MdAssetSyncPlugin extends Plugin {
 				output += parsedImage.original;
 				continue;
 			}
-			if (isNonLocalReference(imageReference)) {
-				log.skippedRemoteOrEmbedded += 1;
-				output += parsedImage.original;
-				continue;
-			}
 
 			const { fileReference: imageFileReference, suffix: imageSuffix } = splitReferenceSuffix(imageReference);
-			const localImagePath = resolveExternalAssetPath(originalDir, imageFileReference);
-			let assetVaultPath = copiedAssets.get(localImagePath);
+			let assetVaultPath: string | undefined;
 
-			if (!assetVaultPath) {
-				try {
-					const imageStats = await fs.stat(localImagePath);
-					if (!imageStats.isFile()) {
-						throw new Error(this.t().pathIsNotFile);
-					}
+			if (/^https?:\/\//i.test(imageReference.trim()) && this.settings.downloadRemoteImages) {
+				const downloadedImage = await this.downloadRemoteImage(
+					imageReference,
+					destinationMarkdownPath,
+					attachmentFolder,
+					attachmentFolderPrepared,
+					log
+				);
+				if (downloadedImage?.assetVaultPath) {
+					assetVaultPath = downloadedImage.assetVaultPath;
+					if (downloadedImage.attachmentFolderPrepared) attachmentFolderPrepared = true;
+				}
+			} else {
+				if (isNonLocalReference(imageReference)) {
+					log.skippedRemoteOrEmbedded += 1;
+					output += parsedImage.original;
+					continue;
+				}
 
-					const imageBytes = await fs.readFile(localImagePath);
-					if (!attachmentFolderPrepared) {
-						await this.ensureVaultFolder(attachmentFolder);
-						attachmentFolderPrepared = true;
+				const localImagePath = resolveExternalAssetPath(originalDir, imageFileReference);
+				assetVaultPath = copiedAssets.get(localImagePath);
+
+				if (!assetVaultPath) {
+					try {
+						const imageStats = await fs.stat(localImagePath);
+						if (!imageStats.isFile()) {
+							throw new Error(this.t().pathIsNotFile);
+						}
+
+						const imageBytes = await fs.readFile(localImagePath);
+						if (!attachmentFolderPrepared) {
+							await this.ensureVaultFolder(attachmentFolder);
+							attachmentFolderPrepared = true;
+						}
+						assetVaultPath = await this.copyAssetToVault(
+							localImagePath,
+							imageBytes,
+							attachmentFolder,
+							log
+						);
+						if (assetVaultPath) {
+							copiedAssets.set(localImagePath, assetVaultPath);
+						}
+					} catch {
+						log.missingAssets.push(
+							`${destinationMarkdownPath} ← ${imageReference} (${this.t().assetNotFound})`
+						);
 					}
-					assetVaultPath = await this.copyAssetToVault(
-						localImagePath,
-						imageBytes,
-						attachmentFolder,
-						log
-					);
-					if (assetVaultPath) {
-						copiedAssets.set(localImagePath, assetVaultPath);
-					}
-				} catch {
-					log.missingAssets.push(
-						`${destinationMarkdownPath} ← ${imageReference} (${this.t().assetNotFound})`
-					);
 				}
 			}
 
@@ -652,6 +829,37 @@ export default class MdAssetSyncPlugin extends Plugin {
 		return candidatePath;
 	}
 
+	private async downloadRemoteImage(
+		imageUrl: string,
+		destinationMarkdownPath: string,
+		attachmentFolder: string,
+		attachmentFolderPrepared: boolean,
+		log: ImportLog
+	): Promise<{ assetVaultPath?: string; attachmentFolderPrepared: boolean } | undefined> {
+		try {
+			const imageBytes = await downloadImage(imageUrl);
+			if (!attachmentFolderPrepared) {
+				await this.ensureVaultFolder(attachmentFolder);
+			}
+
+			const assetVaultPath = await this.copyAssetToVault(
+				getRemoteImageFilePath(imageUrl, imageBytes.finalUrl, imageBytes.contentType),
+				imageBytes.data,
+				attachmentFolder,
+				log
+			);
+			if (assetVaultPath) {
+				log.downloadedRemoteImages.push(`${destinationMarkdownPath} ← ${imageUrl}`);
+			}
+			return { assetVaultPath, attachmentFolderPrepared: true };
+		} catch (error) {
+			log.remoteDownloadFailures.push(
+				`${destinationMarkdownPath} ← ${imageUrl}: ${error instanceof Error ? error.message : this.t().importFailed}`
+			);
+			return undefined;
+		}
+	}
+
 	private async findMd5SuffixedAssetPath(
 		folder: string,
 		originalName: string,
@@ -781,6 +989,8 @@ class ImportReportModal extends Modal {
 		this.contentEl.createEl("h2", { text: this.strings.reportHeading });
 		this.addEntries(this.strings.reportImported, this.log.importedMarkdown);
 		this.addEntries(this.strings.reportReused, this.log.reusedAssets);
+		this.addEntries(this.strings.reportDownloaded, this.log.downloadedRemoteImages);
+		this.addEntries(this.strings.reportRemoteFailures, this.log.remoteDownloadFailures);
 		this.contentEl.createEl("p", {
 			text: `${this.strings.reportSkipped} ${this.log.skippedRemoteOrEmbedded}`
 		});
@@ -800,6 +1010,78 @@ class ImportReportModal extends Modal {
 		for (const entry of entries) {
 			list.createEl("li", { text: entry });
 		}
+	}
+}
+
+class ImportPreviewModal extends Modal {
+	private completed = false;
+	private cancelRequested = false;
+
+	constructor(
+		app: App,
+		private readonly strings: Translation,
+		private readonly previews: MarkdownPreview[],
+		private readonly downloadRemoteImages: boolean,
+		private readonly onConfirm: (confirmed: boolean) => void
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl("h2", { text: this.strings.previewHeading });
+		const totals = this.previews.reduce(
+			(totals, preview) => ({
+				localImages: totals.localImages + preview.localImageCount,
+				remoteImages: totals.remoteImages + preview.remoteImageCount
+			}),
+			{ localImages: 0, remoteImages: 0 }
+		);
+		this.contentEl.createEl("p", {
+			text: this.strings.previewSummary(this.previews.length, totals.localImages, totals.remoteImages)
+		});
+		if (this.downloadRemoteImages) {
+			this.contentEl.createEl("p", { text: this.strings.previewDownloadingDesc });
+		}
+
+		const list = this.contentEl.createEl("ul");
+		for (const preview of this.previews) {
+			list.createEl("li", {
+				text: `${path.basename(preview.sourcePath)}: ${preview.imageCount} / ${preview.localImageCount} / ${preview.remoteImageCount}`
+			});
+		}
+
+		const issueText = this.previews.flatMap((preview) => preview.issues);
+		this.addEntries(this.strings.previewIssueLabel, issueText);
+		new Setting(this.contentEl)
+			.addButton((button) => button.setButtonText(this.strings.cancel).onClick(() => this.finish(false)))
+			.addButton((button) => button.setButtonText(this.strings.previewConfirm).setCta().onClick(() => this.finish(true)));
+	}
+
+	onClose(): void {
+		if (!this.completed) {
+			if (this.cancelRequested) {
+				this.finish(false);
+			} else {
+				this.completed = true;
+				this.onConfirm(false);
+			}
+		}
+		this.contentEl.empty();
+	}
+
+	private addEntries(heading: string, entries: string[]): void {
+		if (entries.length === 0) return;
+		this.contentEl.createEl("h3", { text: heading });
+		const list = this.contentEl.createEl("ul");
+		for (const entry of entries) list.createEl("li", { text: entry });
+	}
+
+	private finish(confirmed: boolean): void {
+		if (this.completed) return;
+		this.completed = true;
+		if (!confirmed) this.cancelRequested = true;
+		this.onConfirm(confirmed);
+		this.close();
 	}
 }
 
@@ -883,6 +1165,15 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 					key: "keepMissingAssetLinks",
 					defaultValue: DEFAULT_SETTINGS.keepMissingAssetLinks
 				}
+			},
+			{
+				name: strings.downloadRemoteName,
+				desc: strings.downloadRemoteDesc,
+				control: {
+					type: "toggle",
+					key: "downloadRemoteImages",
+					defaultValue: DEFAULT_SETTINGS.downloadRemoteImages
+				}
 			}
 		];
 	}
@@ -924,6 +1215,10 @@ class MdAssetSyncSettingTab extends PluginSettingTab {
 				if (typeof value !== "boolean") return;
 				this.plugin.settings.keepMissingAssetLinks = value;
 				break;
+			case "downloadRemoteImages":
+				if (typeof value !== "boolean") return;
+				this.plugin.settings.downloadRemoteImages = value;
+				break;
 			default:
 				return;
 		}
@@ -943,7 +1238,7 @@ interface FolderChoice {
 }
 
 class VaultFolderPickerModal extends FuzzySuggestModal<FolderChoice> {
-	private completed = false;
+	private settled = false;
 	private readonly choices: FolderChoice[];
 
 	constructor(
@@ -979,21 +1274,35 @@ class VaultFolderPickerModal extends FuzzySuggestModal<FolderChoice> {
 	}
 
 	onChooseItem(choice: FolderChoice): void {
-		this.finish(choice.path);
+		console.info(`MdAssetSync: folder choice selected: ${choice.path || "(vault root)"}`);
+		this.settle(choice.path);
+		this.close();
 	}
 
 	onClose(): void {
-		if (this.completed) return;
-		this.completed = true;
-		this.onSelect(null);
+		// Obsidian may close the modal before onChooseItem() runs, so the cancel case is
+		// deferred to let a real selection win the race.
+		window.setTimeout(() => this.settle(null), 0);
+	}
+
+	private settle(folderPath: string | null): void {
+		if (this.settled) return;
+		this.settled = true;
+		if (folderPath === null) console.info("MdAssetSync: folder selection canceled");
+		this.onSelect(folderPath);
 	}
 
 	private buildChoices(recentFolder: string | null): FolderChoice[] {
-		const folderPaths = this.app.vault
-			.getAllFolders()
-			.map((folder) => folder.path)
-			.sort((left, right) => left.localeCompare(right, "zh-CN"));
+		const folderPaths = Array.from(
+			new Set(
+				this.app.vault
+					.getAllFolders()
+					.map((folder) => normalizeVaultFolderPath(folder.path))
+			)
+		).sort((left, right) => left.localeCompare(right, "zh-CN"));
 		const availablePaths = new Set(folderPaths);
+		// The Vault root is always selectable, even when the Vault has no subfolders.
+		availablePaths.add("");
 		const choicesByPath = new Map<string, FolderChoice>();
 		const addChoice = (folderPath: string, marker?: FolderChoiceMarker): void => {
 			if (!availablePaths.has(folderPath)) return;
@@ -1009,19 +1318,14 @@ class VaultFolderPickerModal extends FuzzySuggestModal<FolderChoice> {
 		};
 
 		const activeFile = this.app.workspace.getActiveFile();
-		if (activeFile?.parent) addChoice(activeFile.parent.path, "current");
-		if (recentFolder !== null) addChoice(recentFolder, "recent");
+		if (activeFile?.parent) addChoice(normalizeVaultFolderPath(activeFile.parent.path), "current");
+		if (recentFolder !== null) addChoice(normalizeVaultFolderPath(recentFolder), "recent");
 		addChoice("");
 		for (const folderPath of folderPaths) addChoice(folderPath);
 
-		return Array.from(choicesByPath.values());
-	}
-
-	private finish(folderPath: string | null): void {
-		if (this.completed) return;
-		this.completed = true;
-		this.onSelect(folderPath);
-		this.close();
+		const choices = Array.from(choicesByPath.values());
+		console.info(`MdAssetSync: folder choices prepared: ${choices.length}`);
+		return choices;
 	}
 }
 
@@ -1077,6 +1381,7 @@ async function chooseMarkdownFiles(app: App, strings: Translation): Promise<stri
 
 	// Obsidian desktop normally exposes Electron's dialog. This keeps the command usable
 	// if a future version removes that bridge while still using the OS file chooser.
+	console.warn("MdAssetSync: Electron dialog bridge unavailable; falling back to the HTML file input");
 	return collectMarkdownFiles(await chooseMarkdownFilesWithInput(sourceKind));
 }
 
@@ -1114,10 +1419,16 @@ function chooseMarkdownFilesWithInput(sourceKind: ImportSourceKind): Promise<str
 		input.addEventListener(
 			"change",
 			() => {
-				const filePaths = Array.from(input.files ?? [])
+				const selectedFiles = Array.from(input.files ?? []);
+				const filePaths = selectedFiles
 					.map((file) => (file as File & { path?: string }).path)
 					.filter((filePath): filePath is string => Boolean(filePath));
 				input.remove();
+				if (selectedFiles.length > 0 && filePaths.length === 0) {
+					console.warn(
+						"MdAssetSync: File.path is unavailable in this Electron version; selected files cannot be resolved to absolute paths"
+					);
+				}
 				resolve(filePaths);
 			},
 			{ once: true }
@@ -1177,6 +1488,183 @@ function chooseVaultFolder(app: App, strings: Translation, recentFolder: string 
 	return new Promise((resolve) => {
 		new VaultFolderPickerModal(app, strings, recentFolder, resolve).open();
 	});
+}
+
+interface DownloadedImage {
+	data: Uint8Array;
+	contentType: string;
+	finalUrl: string;
+}
+
+type ImageFetchResult = { kind: "image"; image: DownloadedImage } | { kind: "redirect"; location: string };
+
+async function downloadImage(imageUrl: string): Promise<DownloadedImage> {
+	let url = parseImageUrl(imageUrl);
+	const visitedUrls = new Set<string>();
+
+	for (let redirectCount = 0; ; redirectCount += 1) {
+		const currentUrl = url.toString();
+		if (visitedUrls.has(currentUrl)) {
+			throw new Error("Redirect loop detected");
+		}
+		visitedUrls.add(currentUrl);
+
+		const result = await requestImage(url);
+		if (result.kind === "image") {
+			return result.image;
+		}
+		if (redirectCount >= MAX_IMAGE_REDIRECTS) {
+			throw new Error("Too many redirects");
+		}
+
+		const nextUrl = parseImageUrl(new URL(result.location, url).toString());
+		if (url.protocol === "https:" && nextUrl.protocol === "http:") {
+			throw new Error("Refusing to follow a redirect that downgrades https to http");
+		}
+		url = nextUrl;
+	}
+}
+
+function parseImageUrl(value: string): URL {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new Error("Invalid image URL");
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error("Only http/https images are supported");
+	}
+	return url;
+}
+
+function requestImage(url: URL): Promise<ImageFetchResult> {
+	return new Promise<ImageFetchResult>((resolve, reject) => {
+		let settled = false;
+		let response: import("node:http").IncomingMessage | undefined;
+		let downloadedSize = 0;
+		const chunks: Uint8Array[] = [];
+		const settle = (callback: () => void): void => {
+			if (!settled) {
+				settled = true;
+				callback();
+			}
+		};
+
+		const request = (url.protocol === "https:" ? https : http).get(
+			{
+				headers: {
+					accept: "image/avif,image/webp,image/png,image/jpeg,image/svg+xml,image/*;q=0.8,*/*;q=0.5",
+					"user-agent": IMAGE_DOWNLOAD_USER_AGENT
+				},
+				host: url.hostname,
+				method: "GET",
+				path: `${url.pathname}${url.search}`,
+				port: url.port ? Number(url.port) : undefined,
+				protocol: url.protocol
+			},
+			(message: import("node:http").IncomingMessage) => {
+				response = message;
+				const status = message.statusCode ?? 0;
+				const contentType = String(message.headers["content-type"] ?? "").split(";")[0]?.toLowerCase() ?? "";
+
+				if (isRedirectStatus(status)) {
+					const location = readResponseHeader(message.headers["location"]);
+					message.resume();
+					if (!location) {
+						settle(() => reject(new Error(`HTTP ${status} without a location header`)));
+						return;
+					}
+					settle(() => resolve({ kind: "redirect", location }));
+					return;
+				}
+				if (status < 200 || status >= 300) {
+					settle(() => reject(new Error(`HTTP ${status}`)));
+					message.resume();
+					return;
+				}
+				if (!IMAGE_CONTENT_TYPES.has(contentType)) {
+					settle(() => reject(new Error("Response is not an image")));
+					message.resume();
+					return;
+				}
+
+				message.on("data", (chunk) => {
+					downloadedSize += chunk.length;
+					if (downloadedSize > MAX_IMAGE_SIZE) {
+						settle(() => reject(new Error("Image exceeds the size limit")));
+						response?.destroy();
+						return;
+					}
+					chunks.push(chunk);
+				});
+				message.on("end", () => {
+					settle(() =>
+						resolve({
+							kind: "image",
+							image: { data: concatUint8Arrays(chunks), contentType, finalUrl: url.toString() }
+						})
+					);
+				});
+				message.on("error", (error) => settle(() => reject(error)));
+			}
+		);
+		request.setTimeout(IMAGE_DOWNLOAD_TIMEOUT_MS, () => {
+			settle(() => reject(new Error("Image download timed out")));
+			request.destroy();
+		});
+		request.on("error", (error) => settle(() => reject(error)));
+	});
+}
+
+function isRedirectStatus(status: number): boolean {
+	return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function readResponseHeader(value: string | string[] | undefined): string | undefined {
+	const header = Array.isArray(value) ? value[0] : value;
+	return header?.trim() || undefined;
+}
+
+// The hash prefix always comes from the original URL so re-imports stay stable,
+// while the extension follows the redirect target or the response content type.
+function getRemoteImageFilePath(sourceUrl: string, finalUrl: string, contentType: string): string {
+	const hash = createHash("md5").update(sourceUrl).digest("hex");
+	const contentTypeExtension = IMAGE_EXTENSION_BY_CONTENT_TYPE[contentType.toLowerCase()];
+	let finalPathname = "";
+	try {
+		finalPathname = new URL(finalUrl).pathname;
+	} catch {
+		finalPathname = "";
+	}
+
+	const urlExtension = path.extname(finalPathname).replace(/^\./, "").toLowerCase();
+	if (urlExtension && IMAGE_EXTENSIONS.has(urlExtension)) {
+		return `remote-${hash}-${sanitizeFileName(path.basename(decodeURIComponentOrKeep(finalPathname)))}`;
+	}
+	return `remote-${hash}.${contentTypeExtension ?? "png"}`;
+}
+
+function decodeURIComponentOrKeep(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+}
+
+function sanitizeFileName(fileName: string): string {
+	const cleaned = fileName
+		.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/[. ]+$/, "");
+	if (!cleaned) return "image";
+	if (cleaned.length <= 80) return cleaned;
+
+	const extension = path.extname(cleaned);
+	const baseName = extension ? cleaned.slice(0, -extension.length) : cleaned;
+	return `${baseName.slice(0, Math.max(1, 80 - extension.length))}${extension}`;
 }
 
 function collectReferenceDefinitions(markdown: string, codeMaskedMarkdown: string): Map<string, string> {
@@ -1507,6 +1995,19 @@ function parentVaultPath(vaultPath: string): string {
 	return separatorIndex === -1 ? "" : vaultPath.slice(0, separatorIndex);
 }
 
+// Obsidian exposes the Vault root folder as "/"; the plugin uses "" for it.
+function normalizeVaultFolderPath(folderPath: string): string {
+	const trimmed = folderPath.trim();
+	if (trimmed === "" || trimmed === "/" || trimmed === "." || trimmed === "./") {
+		return "";
+	}
+	return trimVaultPath(trimmed);
+}
+
+function trimVaultPath(vaultPath: string): string {
+	return vaultPath.replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
 function joinVaultPath(...segments: string[]): string {
 	const joined = segments.filter(Boolean).join("/");
 	return joined ? normalizePath(joined) : "";
@@ -1525,6 +2026,23 @@ function escapeMarkdownAltText(value: string): string {
 	return value.replace(/\\/g, "\\\\").replace(/\x5d/g, "\\]");
 }
 
+function describeImportError(error: unknown, strings: Translation): string {
+	if (error instanceof Error && error.message) return error.message;
+	if (typeof error === "string" && error.trim()) return error;
+	return strings.importFailed;
+}
+
 function bufferToArrayBuffer(buffer: Uint8Array): ArrayBuffer {
 	return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+}
+
+function concatUint8Arrays(chunks: Uint8Array[]): Uint8Array {
+	const totalLength = chunks.reduce((total, chunk) => total + chunk.length, 0);
+	const output = new Uint8Array(totalLength);
+	let offset = 0;
+	for (const chunk of chunks) {
+		output.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return output;
 }
