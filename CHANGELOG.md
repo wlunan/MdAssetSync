@@ -2,6 +2,17 @@
 
 All notable changes to MdAssetSync are documented here.
 
+## 1.1.6 - 2026-11-10
+
+### Localize remote images inside the Vault
+
+- Add a `Localize remote images in the current note` command that downloads http/https images referenced by the active Markdown note into the Vault attachment location and rewrites their links in place.
+- Add a `Localize remote images in all notes within a folder` command that walks every Markdown note under a chosen folder and applies the same localization per file.
+- Reuse the existing download pipeline (redirect handling, content-type and 50 MB checks, same-name collision strategy, MD5 reuse) and the native `attachmentFolderPath` setting, so internal notes and external imports share a single behavior.
+- Skip code blocks, unresolved reference definitions, and non-http(s) references; deduplicate repeated URLs within a single note; failed downloads keep the original link.
+- Report progress while running and show a result modal listing modified notes, downloaded images, failures, conflicts, and errors.
+- The folder picker modal accepts an optional title override so the new command can present a purpose-specific heading.
+
 ## 1.1.5 - 2026-11-04
 
 ### Preview and offline images

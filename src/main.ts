@@ -174,7 +174,21 @@ const TRANSLATIONS = {
 		noMatchingFolders: "No matching folders",
 		vaultRoot: "Vault root",
 		cancel: "Cancel",
-		markdownFilter: "Markdown"
+		markdownFilter: "Markdown",
+		localizeCurrentCommandName: "Localize remote images in the current note",
+		localizeFolderCommandName: "Localize remote images in all notes within a folder",
+		localizeNoActiveFile: "MdAssetSync: no active Markdown note.",
+		localizeNotMarkdown: "MdAssetSync: the active file is not a Markdown note.",
+		localizeNoRemoteImages: "MdAssetSync: no http/https images to localize in this note.",
+		localizeNoMarkdownInFolder: "MdAssetSync: no Markdown notes found in the chosen folder.",
+		localizeInProgress: "MdAssetSync: localizing remote images…",
+		localizeProgress: (current: number, total: number, fileName: string) =>
+			`MdAssetSync: localizing ${current}/${total}: ${fileName}`,
+		localizeFolderModalHeading: "Choose a folder to localize remote images",
+		localizeReportHeading: "Localize results",
+		localizeReportModified: "Modified notes:",
+		localizeResult: (modified: number, downloaded: number, failed: number, errors: number) =>
+			`MdAssetSync: ${modified} note(s) modified; ${downloaded} image(s) downloaded; ${failed} download failure(s); ${errors} error(s).`
 	},
 	"zh-CN": {
 		commandName: "导入外部 Markdown 并同步资源",
@@ -260,7 +274,21 @@ const TRANSLATIONS = {
 		noMatchingFolders: "没有匹配的文件夹",
 		vaultRoot: "Vault 根目录",
 		cancel: "取消",
-		markdownFilter: "Markdown"
+		markdownFilter: "Markdown",
+		localizeCurrentCommandName: "本地化当前笔记的网络图片",
+		localizeFolderCommandName: "本地化文件夹中所有笔记的网络图片",
+		localizeNoActiveFile: "MdAssetSync：没有打开的 Markdown 笔记。",
+		localizeNotMarkdown: "MdAssetSync：当前文件不是 Markdown 笔记。",
+		localizeNoRemoteImages: "MdAssetSync：当前笔记没有需要本地化的网络图片。",
+		localizeNoMarkdownInFolder: "MdAssetSync：所选文件夹中没有 Markdown 笔记。",
+		localizeInProgress: "MdAssetSync：正在本地化网络图片…",
+		localizeProgress: (current: number, total: number, fileName: string) =>
+			`MdAssetSync：正在本地化 ${current}/${total}：${fileName}`,
+		localizeFolderModalHeading: "选择要本地化网络图片的文件夹",
+		localizeReportHeading: "本地化结果",
+		localizeReportModified: "已修改的笔记：",
+		localizeResult: (modified: number, downloaded: number, failed: number, errors: number) =>
+			`MdAssetSync：已修改 ${modified} 个笔记；下载 ${downloaded} 张图片；下载失败 ${failed} 个；错误 ${errors} 个。`
 	}
 } satisfies Record<PluginLanguage, object>;
 
@@ -334,6 +362,8 @@ export default class MdAssetSyncPlugin extends Plugin {
 	settings: MdAssetSyncSettings = DEFAULT_SETTINGS;
 	private isImporting = false;
 	private importCommand: { name: string } | null = null;
+	private localizeCurrentCommand: { name: string } | null = null;
+	private localizeFolderCommand: { name: string } | null = null;
 	private ribbonIconEl: HTMLElement | null = null;
 
 	async onload(): Promise<void> {
@@ -344,6 +374,16 @@ export default class MdAssetSyncPlugin extends Plugin {
 			id: "import-external-markdown-and-assets",
 			name: this.t().commandName,
 			callback: () => this.importExternalMarkdown()
+		});
+		this.localizeCurrentCommand = this.addCommand({
+			id: "localize-remote-images-current-file",
+			name: this.t().localizeCurrentCommandName,
+			callback: () => this.localizeCurrentFileRemoteImages()
+		});
+		this.localizeFolderCommand = this.addCommand({
+			id: "localize-remote-images-in-folder",
+			name: this.t().localizeFolderCommandName,
+			callback: () => this.localizeFolderRemoteImages()
 		});
 		this.ribbonIconEl = this.addRibbonIcon("images", this.t().commandName, () => this.importExternalMarkdown());
 
@@ -382,6 +422,12 @@ export default class MdAssetSyncPlugin extends Plugin {
 	refreshInterfaceLabels(): void {
 		if (this.importCommand) {
 			this.importCommand.name = this.t().commandName;
+		}
+		if (this.localizeCurrentCommand) {
+			this.localizeCurrentCommand.name = this.t().localizeCurrentCommandName;
+		}
+		if (this.localizeFolderCommand) {
+			this.localizeFolderCommand.name = this.t().localizeFolderCommandName;
 		}
 		if (this.ribbonIconEl) {
 			setTooltip(this.ribbonIconEl, this.t().commandName);
@@ -974,6 +1020,205 @@ export default class MdAssetSyncPlugin extends Plugin {
 		);
 		new ImportReportModal(this.app, strings, log).open();
 	}
+
+	private createEmptyLog(previewErrors: string[] = []): ImportLog {
+		return {
+			importedMarkdown: [],
+			reusedAssets: [],
+			missingAssets: [],
+			conflicts: [],
+			errors: [...previewErrors],
+			skippedRemoteOrEmbedded: 0,
+			downloadedRemoteImages: [],
+			remoteDownloadFailures: []
+		};
+	}
+
+	private async localizeCurrentFileRemoteImages(): Promise<void> {
+		if (!Platform.isDesktopApp) {
+			new Notice(this.t().desktopOnly);
+			return;
+		}
+		if (this.isImporting) {
+			new Notice(this.t().importInProgress);
+			return;
+		}
+		const file = this.app.workspace.getActiveFile();
+		if (!file) {
+			new Notice(this.t().localizeNoActiveFile, 6000);
+			return;
+		}
+		if (file.extension !== "md" && file.extension !== "markdown") {
+			new Notice(this.t().localizeNotMarkdown, 6000);
+			return;
+		}
+
+		this.isImporting = true;
+		const progress = new Notice(this.t().localizeInProgress, 0);
+		const log = this.createEmptyLog();
+		try {
+			const modified = await this.localizeRemoteImagesInFile(file, log);
+			if (!modified && log.remoteDownloadFailures.length === 0) {
+				new Notice(this.t().localizeNoRemoteImages, 6000);
+				return;
+			}
+			this.reportLocalizeResult(modified ? [file.path] : [], log);
+		} catch (error) {
+			console.error(`MdAssetSync: failed to localize ${file.path}`, error);
+			new Notice(this.t().importFailed, 8000);
+		} finally {
+			progress.hide();
+			this.isImporting = false;
+		}
+	}
+
+	private async localizeFolderRemoteImages(): Promise<void> {
+		if (!Platform.isDesktopApp) {
+			new Notice(this.t().desktopOnly);
+			return;
+		}
+		if (this.isImporting) {
+			new Notice(this.t().importInProgress);
+			return;
+		}
+
+		const targetFolder = await chooseVaultFolder(
+			this.app,
+			this.t(),
+			this.settings.lastMarkdownFolder,
+			this.t().localizeFolderModalHeading
+		);
+		if (targetFolder === null) {
+			new Notice(this.t().importCanceled, 6000);
+			return;
+		}
+
+		const files = this.app.vault
+			.getMarkdownFiles()
+			.filter((file) => isPathInsideFolder(file.path, targetFolder))
+			.sort((left, right) => left.path.localeCompare(right.path, "zh-CN"));
+		if (files.length === 0) {
+			new Notice(this.t().localizeNoMarkdownInFolder, 6000);
+			return;
+		}
+
+		this.isImporting = true;
+		const log = this.createEmptyLog();
+		const modified: string[] = [];
+		const progress = new Notice(this.t().localizeInProgress, 0);
+		try {
+			for (let index = 0; index < files.length; index += 1) {
+				const file = files[index];
+				progress.setMessage(this.t().localizeProgress(index + 1, files.length, file.name));
+				try {
+					if (await this.localizeRemoteImagesInFile(file, log)) {
+						modified.push(file.path);
+					}
+				} catch (error) {
+					console.error(`MdAssetSync: failed to localize ${file.path}`, error);
+					log.errors.push(`${file.path}: ${describeImportError(error, this.t())}`);
+				}
+			}
+			this.reportLocalizeResult(modified, log);
+		} finally {
+			progress.hide();
+			this.isImporting = false;
+		}
+	}
+
+	private async localizeRemoteImagesInFile(file: TFile, log: ImportLog): Promise<boolean> {
+		const markdown = await this.app.vault.read(file);
+		const codeMaskedMarkdown = maskCodeSegments(markdown);
+		const referenceDefinitions = collectReferenceDefinitions(markdown, codeMaskedMarkdown);
+		const matches = Array.from(markdown.matchAll(IMAGE_SYNTAX_PATTERN)).filter(
+			(match) => codeMaskedMarkdown[match.index ?? 0] !== " "
+		);
+		if (matches.length === 0) return false;
+
+		const destinationMarkdownPath = file.path;
+		const destinationDirectory = parentVaultPath(destinationMarkdownPath);
+		const attachmentFolder = this.getAttachmentFolder(destinationMarkdownPath);
+		let attachmentFolderPrepared = false;
+		const downloadedByUrl = new Map<string, string | undefined>();
+
+		let output = "";
+		let cursor = 0;
+		let modified = false;
+
+		for (const match of matches) {
+			const matchStart = match.index ?? 0;
+			output += markdown.slice(cursor, matchStart);
+			cursor = matchStart + match[0].length;
+
+			const parsedImage = parseImageSyntax(match, referenceDefinitions);
+			if (!parsedImage) {
+				output += match[0];
+				continue;
+			}
+			if (parsedImage.unresolvedReference) {
+				output += parsedImage.original;
+				continue;
+			}
+
+			const imageReference = parsedImage.imageReference;
+			if (parsedImage.isWikiEmbed && !isImageReference(imageReference)) {
+				output += parsedImage.original;
+				continue;
+			}
+			if (!/^https?:\/\//i.test(imageReference.trim())) {
+				output += parsedImage.original;
+				continue;
+			}
+
+			const { suffix: imageSuffix } = splitReferenceSuffix(imageReference);
+			let assetVaultPath: string | undefined;
+			if (downloadedByUrl.has(imageReference)) {
+				assetVaultPath = downloadedByUrl.get(imageReference);
+			} else {
+				const downloaded = await this.downloadRemoteImage(
+					imageReference,
+					destinationMarkdownPath,
+					attachmentFolder,
+					attachmentFolderPrepared,
+					log
+				);
+				if (downloaded) {
+					assetVaultPath = downloaded.assetVaultPath;
+					if (downloaded.attachmentFolderPrepared) attachmentFolderPrepared = true;
+				}
+				downloadedByUrl.set(imageReference, assetVaultPath);
+			}
+
+			if (assetVaultPath) {
+				const relativePath = makeVaultRelativePath(destinationDirectory, assetVaultPath);
+				output += `![${escapeMarkdownAltText(parsedImage.altText)}](${escapeAttachmentMarkdownDestination(relativePath, imageSuffix)})`;
+				modified = true;
+			} else {
+				output += parsedImage.original;
+			}
+		}
+
+		if (!modified) {
+			return false;
+		}
+		output += markdown.slice(cursor);
+		await this.app.vault.modify(file, output);
+		return true;
+	}
+
+	private reportLocalizeResult(modifiedFiles: string[], log: ImportLog): void {
+		const strings = this.t();
+		new Notice(
+			strings.localizeResult(
+				modifiedFiles.length,
+				log.downloadedRemoteImages.length,
+				log.remoteDownloadFailures.length,
+				log.errors.length
+			),
+			8000
+		);
+		new LocalizeReportModal(this.app, strings, modifiedFiles, log).open();
+	}
 }
 
 class ImportReportModal extends Modal {
@@ -995,6 +1240,40 @@ class ImportReportModal extends Modal {
 			text: `${this.strings.reportSkipped} ${this.log.skippedRemoteOrEmbedded}`
 		});
 		this.addEntries(this.strings.reportMissing, this.log.missingAssets);
+		this.addEntries(this.strings.reportConflicts, this.log.conflicts);
+		this.addEntries(this.strings.reportErrors, this.log.errors);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+
+	private addEntries(heading: string, entries: string[]): void {
+		if (entries.length === 0) return;
+		this.contentEl.createEl("h3", { text: heading });
+		const list = this.contentEl.createEl("ul");
+		for (const entry of entries) {
+			list.createEl("li", { text: entry });
+		}
+	}
+}
+
+class LocalizeReportModal extends Modal {
+	constructor(
+		app: App,
+		private readonly strings: Translation,
+		private readonly modifiedFiles: string[],
+		private readonly log: ImportLog
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl("h2", { text: this.strings.localizeReportHeading });
+		this.addEntries(this.strings.localizeReportModified, this.modifiedFiles);
+		this.addEntries(this.strings.reportReused, this.log.reusedAssets);
+		this.addEntries(this.strings.reportDownloaded, this.log.downloadedRemoteImages);
+		this.addEntries(this.strings.reportRemoteFailures, this.log.remoteDownloadFailures);
 		this.addEntries(this.strings.reportConflicts, this.log.conflicts);
 		this.addEntries(this.strings.reportErrors, this.log.errors);
 	}
@@ -1245,10 +1524,11 @@ class VaultFolderPickerModal extends FuzzySuggestModal<FolderChoice> {
 		app: App,
 		private readonly strings: Translation,
 		recentFolder: string | null,
-		private readonly onSelect: (folderPath: string | null) => void
+		private readonly onSelect: (folderPath: string | null) => void,
+		overrideTitle?: string
 	) {
 		super(app);
-		this.setTitle(strings.folderModalHeading);
+		this.setTitle(overrideTitle ?? strings.folderModalHeading);
 		this.setPlaceholder(strings.folderSearchPlaceholder);
 		this.emptyStateText = strings.noMatchingFolders;
 		this.choices = this.buildChoices(recentFolder);
@@ -1484,9 +1764,14 @@ function isMarkdownFilePath(filePath: string): boolean {
 	return extension === ".md" || extension === ".markdown";
 }
 
-function chooseVaultFolder(app: App, strings: Translation, recentFolder: string | null): Promise<string | null> {
+function chooseVaultFolder(
+	app: App,
+	strings: Translation,
+	recentFolder: string | null,
+	overrideTitle?: string
+): Promise<string | null> {
 	return new Promise((resolve) => {
-		new VaultFolderPickerModal(app, strings, recentFolder, resolve).open();
+		new VaultFolderPickerModal(app, strings, recentFolder, resolve, overrideTitle).open();
 	});
 }
 
@@ -2006,6 +2291,11 @@ function normalizeVaultFolderPath(folderPath: string): string {
 
 function trimVaultPath(vaultPath: string): string {
 	return vaultPath.replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function isPathInsideFolder(filePath: string, folder: string): boolean {
+	if (!folder) return true;
+	return filePath === folder || filePath.startsWith(`${folder}/`);
 }
 
 function joinVaultPath(...segments: string[]): string {
